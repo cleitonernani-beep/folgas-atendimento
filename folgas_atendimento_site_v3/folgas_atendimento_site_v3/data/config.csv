@@ -1,0 +1,4 @@
+chave,valor
+periodos,"Manhã,Tarde,Noite"
+setores,"Praça,Copa,Caixa,Escritório,Entrega"
+horarios_padrao,"08:30,08:40,10:30,11:00,11:30,12:00,14:30,16:00,16:30,18:00,18:30,19:00"

@@ -1,0 +1,21 @@
+COMO ABRIR O SISTEMA FOLGAS ATENDIMENTO
+
+1) Clique com o botao direito no ZIP e escolha EXTRair tudo.
+   Nao execute dentro do arquivo ZIP.
+
+2) Entre na pasta extraida.
+
+3) Clique duas vezes em:
+   ABRIR_SISTEMA_WINDOWS.cmd
+
+4) Aguarde. Na primeira vez ele pode demorar porque instala Streamlit, pandas e openpyxl.
+
+5) Se o navegador nao abrir sozinho, abra o Chrome/Edge e digite:
+   http://localhost:8501
+
+6) Nao feche a janela preta enquanto estiver usando o sistema.
+   Ela precisa ficar aberta para o site continuar funcionando.
+
+7) Se nao abrir, rode:
+   DIAGNOSTICO_WINDOWS.cmd
+   e envie uma foto da tela.

@@ -1,0 +1,4 @@
+data,nome,acao,setor,periodo,horario,observacao
+2026-07-05,THIAGO,ESCALAR,Copa,Tarde,16:00,"Exemplo: escalar Tiago manualmente no domingo às 16h."
+2026-07-05,ANA JULYA,ALTERAR_HORARIO,Copa,Noite,18:00,"Exemplo: Ana Julya domingo a partir das 18h."
+2026-07-06,CLEBER,FOLGAR,,,,"Exemplo: folga manual nesta data."

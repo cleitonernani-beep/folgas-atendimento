@@ -1,0 +1,5 @@
+tipo,nome,data_inicio,data_fim,dia_folga_semana,observacao
+FÉRIAS,Exemplo Colaborador,2026-07-01,2026-07-15,,"Exemplo: apague ou edite antes de usar."
+FOLGA,Exemplo Colaborador,2026-07-03,2026-07-03,,"Folga pontual."
+DOM/SEM,Exemplo Colaborador,2026-07-05,2026-07-05,Segunda,"Folga domingo + folga da semana."
+DIA/DOM/SEM,Exemplo Colaborador,2026-07-04,2026-07-05,Terça,"Trabalha só dia no sábado, folga domingo e folga mais um dia da semana."
