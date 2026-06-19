@@ -166,13 +166,6 @@ def prepare_ajustes_display(df: pd.DataFrame) -> pd.DataFrame:
         df["acao"] = df["acao"].map(display_action)
     return df
 
-
-def ensure_colaborador_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    if "carga_horaria" not in df.columns:
-        df["carga_horaria"] = "7"
-    return df
-
 st.caption("Operação semanal por dia, período, setor, função, colaborador, horário de entrada, folgas, férias, afastamentos e extras.")
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -323,83 +316,85 @@ with tab4:
         gerar_sugestao = st.button("Gerar Sugestão", type="primary")
     with action_cols[1]:
         st.button("Imprimir", help="Use Ctrl+P / Cmd+P para imprimir os cards da escala.")
-    if gerar_sugestao:
-        st.session_state.schedule_result = generate_schedule(
-            colaboradores=colaboradores,
-            ideal=quadro,
-            eventos=eventos,
-            ajustes=ajustes,
-            start=start_date,
-            domingo_especial=domingo_especial,
-            sugerir_extras=sugerir_extras,
-        )
-
-    if "schedule_result" not in st.session_state:
-        st.info("Clique em **Gerar Sugestão** para montar a escala da semana.")
-    else:
-        schedule, summary = st.session_state.schedule_result
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Pessoas/linhas na escala", len(schedule))
-        with c2:
-            st.metric("Alertas de falta", int(summary["faltam"].sum()) if not summary.empty else 0)
-        with c3:
-            st.metric("Sugestões de extras", int((schedule["origem"] == "Sugestão extra").sum()) if not schedule.empty and "origem" in schedule else 0)
-
-        st.write("### Tabela da escala")
-        st.dataframe(schedule, width="stretch", hide_index=True)
-
-        st.write("### Conferência do quadro ideal")
-        if not summary.empty:
-            def highlight_gap(row):
-                if row["faltam"] > 0:
-                    return ["background-color: #ffd6d6"] * len(row)
-                if row["sobra"] > 0:
-                    return ["background-color: #fff4cc"] * len(row)
-                return [""] * len(row)
-            st.dataframe(summary.style.apply(highlight_gap, axis=1), width="stretch", hide_index=True)
-
-            st.dataframe(summary.style.apply(highlight_gap, axis=1), use_container_width=True, hide_index=True)
-            faltas = summary[summary["faltam"] > 0].copy()
-            if not faltas.empty:
-                st.error("Alertas finais após tentativa automática de preenchimento")
-                st.dataframe(
-                    faltas[["dia", "periodo", "setor", "ideal", "escalado", "faltam", "motivo_falta"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-        else:
-            st.info("Nenhum quadro ideal encontrado.")
-
-        st.write("### Diagnóstico de cobertura")
-        diagnostico = coverage_diagnostics(summary, colaboradores, schedule, eventos, start_date)
-        if not diagnostico.empty:
-            st.markdown('<div class="coverage-help">Use esta área para entender se a falta é de cadastro, disponibilidade, extra ou excesso no quadro ideal.</div>', unsafe_allow_html=True)
-            st.dataframe(diagnostico, width="stretch", hide_index=True)
-        else:
-            st.info("Não há dados suficientes para diagnóstico de cobertura.")
-
-        st.write("### Texto pronto para WhatsApp")
-        text = whatsapp_text(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date)
-        st.text_area("Copie e cole no grupo", value=text, height=420)
-
-        st.download_button("Baixar texto para WhatsApp (.txt)", data=text.encode("utf-8"), file_name="escala_whatsapp.txt", mime="text/plain")
-        st.download_button("Baixar escala em CSV", data=schedule.to_csv(index=False).encode("utf-8"), file_name="escala_semanal.csv", mime="text/csv")
-        excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
-        st.download_button(
-            "Baixar Excel visual (.xlsx)",
-            data=to_excel_bytes(
-                schedule,
-                summary,
+    if gerar_sugestao or "schedule_result" not in st.session_state:
+        if gerar_sugestao:
+            st.session_state.schedule_result = generate_schedule(
                 colaboradores=colaboradores,
+                ideal=quadro,
                 eventos=eventos,
+                ajustes=ajustes,
                 start=start_date,
                 domingo_especial=domingo_especial,
-            ),
-            file_name=excel_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+                sugerir_extras=sugerir_extras,
+            )
+        else:
+            st.info("Clique em **Gerar Sugestão** para montar a escala da semana.")
+            st.stop()
+
+    schedule, summary = st.session_state.schedule_result
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Pessoas/linhas na escala", len(schedule))
+    with c2:
+        st.metric("Alertas de falta", int(summary["faltam"].sum()) if not summary.empty else 0)
+    with c3:
+        st.metric("Sugestões de extras", int((schedule["origem"] == "Sugestão extra").sum()) if not schedule.empty and "origem" in schedule else 0)
+
+    st.write("### Tabela da escala")
+    st.dataframe(schedule, width="stretch", hide_index=True)
+
+    st.write("### Conferência do quadro ideal")
+    if not summary.empty:
+        def highlight_gap(row):
+            if row["faltam"] > 0:
+                return ["background-color: #ffd6d6"] * len(row)
+            if row["sobra"] > 0:
+                return ["background-color: #fff4cc"] * len(row)
+            return [""] * len(row)
+        st.dataframe(summary.style.apply(highlight_gap, axis=1), width="stretch", hide_index=True)
+
+        st.dataframe(summary.style.apply(highlight_gap, axis=1), use_container_width=True, hide_index=True)
+        faltas = summary[summary["faltam"] > 0].copy()
+        if not faltas.empty:
+            st.error("Alertas finais após tentativa automática de preenchimento")
+            st.dataframe(
+                faltas[["dia", "periodo", "setor", "ideal", "escalado", "faltam", "motivo_falta"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        st.info("Nenhum quadro ideal encontrado.")
+
+    st.write("### Diagnóstico de cobertura")
+    diagnostico = coverage_diagnostics(summary, colaboradores, schedule, eventos, start_date)
+    if not diagnostico.empty:
+        st.markdown('<div class="coverage-help">Use esta área para entender se a falta é de cadastro, disponibilidade, extra ou excesso no quadro ideal.</div>', unsafe_allow_html=True)
+        st.dataframe(diagnostico, width="stretch", hide_index=True)
+    else:
+        st.info("Não há dados suficientes para diagnóstico de cobertura.")
+
+    st.write("### Texto pronto para WhatsApp")
+    text = whatsapp_text(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date)
+    st.text_area("Copie e cole no grupo", value=text, height=420)
+
+    st.download_button("Baixar texto para WhatsApp (.txt)", data=text.encode("utf-8"), file_name="escala_whatsapp.txt", mime="text/plain")
+    st.download_button("Baixar escala em CSV", data=schedule.to_csv(index=False).encode("utf-8"), file_name="escala_semanal.csv", mime="text/csv")
+    excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
+    st.download_button(
+        "Baixar Excel visual (.xlsx)",
+        data=to_excel_bytes(
+            schedule,
+            summary,
+            colaboradores=colaboradores,
+            eventos=eventos,
+            start=start_date,
+            domingo_especial=domingo_especial,
+        ),
+        file_name=excel_filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
 with tab5:
     st.subheader("Regras implementadas nesta versão")
     st.markdown("""
