@@ -353,13 +353,14 @@ def coverage_frame(schedule: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def coverage_summary(schedule: pd.DataFrame, ideal: pd.DataFrame) -> pd.DataFrame:
+def coverage_summary(schedule: pd.DataFrame, ideal: pd.DataFrame, reasons: dict[tuple[str, str, str], str] | None = None) -> pd.DataFrame:
     if ideal.empty:
         return pd.DataFrame()
     ideal = ideal.copy()
     ideal["dia"] = ideal["dia"].map(normalize_day)
     coverage = coverage_frame(schedule)
     rows = []
+    reasons = reasons or {}
     for _, ir in ideal.iterrows():
         dia = ir.get("dia", "")
         periodo = ir.get("periodo", "")
@@ -374,8 +375,240 @@ def coverage_summary(schedule: pd.DataFrame, ideal: pd.DataFrame) -> pd.DataFram
                 actual = 0
             else:
                 actual = int(((coverage["dia"] == dia) & (coverage["periodo"] == periodo) & (coverage["setor"] == setor)).sum())
-            rows.append({"dia": dia, "periodo": periodo, "setor": setor, "ideal": needed, "escalado": actual, "faltam": max(needed - actual, 0), "sobra": max(actual - needed, 0)})
+            missing = max(needed - actual, 0)
+            rows.append({
+                "dia": dia,
+                "periodo": periodo,
+                "setor": setor,
+                "ideal": needed,
+                "escalado": actual,
+                "faltam": missing,
+                "sobra": max(actual - needed, 0),
+                "motivo_falta": reasons.get((dia, periodo, setor), "") if missing else "",
+            })
     return pd.DataFrame(rows)
+
+
+def normalized_sectors(value: object) -> set[str]:
+    text = str(value).replace("/", ",").replace(";", ",")
+    return {part.strip().lower() for part in text.split(",") if part.strip()}
+
+
+def can_work_sector(row: pd.Series, setor: str, *, secondary: bool = False) -> bool:
+    target = setor.strip().lower()
+    own = str(row.get("setor_escala", row.get("setor_cadastro", ""))).strip().lower()
+    if not secondary:
+        return own == target
+    return target in normalized_sectors(row.get("setores_secundarios", "")) and own != target
+
+
+def is_internal_extra(row: pd.Series) -> bool:
+    name = str(row.get("nome", "")).strip().lower()
+    return name in {"daia - extra", "hemerson - extra"}
+
+
+def target_time_and_period(row: pd.Series, current: date, periodo: str, domingo_especial: bool) -> tuple[str, str]:
+    horario = str(row.get("horario_padrao", "")).strip()
+    target_period = periodo
+    if current.weekday() == 6 and periodo in {"Tarde", "Noite"}:
+        horario, _ = default_sunday_time(row)
+        if horario < "16:00" and not domingo_especial:
+            horario = "16:00"
+    sat_override = default_saturday_override(row) if current.weekday() == 5 else None
+    if sat_override and periodo == sat_override[1]:
+        horario, target_period = sat_override
+    return horario, target_period
+
+
+
+def covering_row_indices(schedule: pd.DataFrame, nome: str, current: date, periodo: str) -> list[int]:
+    indices: list[int] = []
+    if schedule.empty:
+        return indices
+    day_rows = schedule[
+        (schedule["data"].astype(str) == current.isoformat())
+        & (schedule["nome"].astype(str).str.strip().str.lower() == nome.strip().lower())
+    ]
+    for idx, row in day_rows.iterrows():
+        if periodo in covered_periods(row):
+            indices.append(idx)
+    return indices
+
+
+def can_reassign_covering_row(schedule: pd.DataFrame, ideal: pd.DataFrame, idx: int, target_setor: str, periodo: str) -> bool:
+    row = schedule.loc[idx]
+    current_setor = str(row.get("setor", "")).strip()
+    dia = str(row.get("dia", "")).strip()
+    if current_setor.lower() == target_setor.strip().lower():
+        return False
+    current_summary = coverage_summary(schedule, ideal)
+    same = current_summary[
+        (current_summary["dia"] == dia)
+        & (current_summary["periodo"] == periodo)
+        & (current_summary["setor"] == current_setor)
+    ]
+    if same.empty:
+        return True
+    return int(same.iloc[0].get("sobra", 0)) > 0 or int(same.iloc[0].get("ideal", 0)) == 0
+
+def person_covers_period(schedule: pd.DataFrame, nome: str, current: date, periodo: str) -> bool:
+    if schedule.empty:
+        return False
+    day_rows = schedule[
+        (schedule["data"].astype(str) == current.isoformat())
+        & (schedule["nome"].astype(str).str.strip().str.lower() == nome.strip().lower())
+    ]
+    return any(periodo in covered_periods(row) for _, row in day_rows.iterrows())
+
+
+def can_be_auto_added(row: pd.Series, schedule: pd.DataFrame, current: date, periodo: str, eventos: pd.DataFrame, ajustes: pd.DataFrame, domingo_especial: bool) -> tuple[bool, str]:
+    nome = str(row.get("nome", "")).strip()
+    tipo = str(row.get("tipo", "")).strip().lower()
+    dia = DIAS_PT[current.weekday()]
+
+    if not employee_active(row, current, eventos):
+        return False, "indisponível por status, férias, afastamento ou desligamento"
+    if current.weekday() == 6 and tipo.startswith("estagi"):
+        return False, "estagiários não trabalham domingo"
+    if current.weekday() == 6 and not normalize_bool(row.get("trabalha_domingo", "")):
+        return False, "não trabalha domingo"
+    if current.weekday() == 6 and periodo == "Manhã" and not domingo_especial:
+        return False, "domingo normal não tem manhã"
+    if explicit_folga(nome, current, eventos) and not has_manual_escalar(nome, current, ajustes):
+        return False, "folga/evento no dia"
+    folga_fixa = normalize_day(row.get("folga_fixa", ""))
+    if folga_fixa and folga_fixa != "Não" and dia == folga_fixa and not has_manual_escalar(nome, current, ajustes):
+        return False, "folga fixa no dia"
+    if works_only_day(nome, current, eventos) and periodo == "Noite":
+        return False, "regra DIA/DOM/SEM não permite noite"
+    if person_covers_period(schedule, nome, current, periodo):
+        return False, "já cobre este dia/período"
+
+    default_period = str(row.get("periodo_padrao", "")).strip() or "Tarde"
+    # O sistema não antecipa horário sozinho: Manhã só entra automaticamente
+    # para quem já tem Manhã como período padrão.
+    if periodo == "Manhã" and default_period != "Manhã":
+        return False, "cobrir Manhã exigiria antecipação manual"
+    return True, ""
+
+
+def add_schedule_row(schedule: pd.DataFrame, row: pd.Series, current: date, periodo: str, setor: str, origem: str, domingo_especial: bool) -> pd.DataFrame:
+    horario, target_period = target_time_and_period(row, current, periodo, domingo_especial)
+    addition = {
+        "data": current.isoformat(),
+        "dia": DIAS_PT[current.weekday()],
+        "periodo": target_period,
+        "setor": setor,
+        "funcao": str(row.get("funcao", "Extra")).strip(),
+        "nome": str(row.get("nome", "")).strip(),
+        "horario": horario,
+        "origem": origem,
+        "observacao": f"Preenchido automaticamente para cobrir {setor} / {periodo}.",
+    }
+    return pd.concat([schedule, pd.DataFrame([addition])], ignore_index=True)
+
+
+def auto_fill_coverage(
+    schedule: pd.DataFrame,
+    colaboradores: pd.DataFrame,
+    ideal: pd.DataFrame,
+    eventos: pd.DataFrame,
+    ajustes: pd.DataFrame,
+    start: date,
+    domingo_especial: bool = False,
+) -> tuple[pd.DataFrame, dict[tuple[str, str, str], str]]:
+    """Preenche faltas antes de alertar, seguindo a ordem de prioridade do negócio."""
+    schedule = schedule.copy()
+    reasons: dict[tuple[str, str, str], str] = {}
+    extra_count = {
+        str(row.get("nome", "")).strip(): int((schedule["nome"].astype(str).str.strip().str.lower() == str(row.get("nome", "")).strip().lower()).sum())
+        for _, row in colaboradores.iterrows()
+        if str(row.get("tipo", "")).strip().lower() == "extra"
+    }
+
+    day_by_name = {DIAS_PT[current.weekday()]: current for current in date_range(start)}
+
+    while True:
+        summary = coverage_summary(schedule, ideal)
+        gaps = summary[summary["faltam"] > 0] if not summary.empty else pd.DataFrame()
+        if gaps.empty:
+            break
+
+        changed = False
+        reasons.clear()
+        for _, gap in gaps.iterrows():
+            dia = str(gap["dia"])
+            periodo = str(gap["periodo"])
+            setor = str(gap["setor"])
+            current = day_by_name.get(dia)
+            if current is None:
+                reasons[(dia, periodo, setor)] = "dia fora da semana operacional"
+                continue
+            if current.weekday() == 6 and periodo == "Manhã" and not domingo_especial:
+                reasons[(dia, periodo, setor)] = "domingo normal não tem período da Manhã"
+                continue
+
+            attempts: list[str] = []
+            stages = [
+                ("Fixo próprio setor", colaboradores[colaboradores["tipo"].astype(str).str.strip().str.lower() != "extra"], lambda r: can_work_sector(r, setor, secondary=False), "Auto - fixo do setor"),
+                ("Fixo setor secundário", colaboradores[colaboradores["tipo"].astype(str).str.strip().str.lower() != "extra"], lambda r: can_work_sector(r, setor, secondary=True), "Auto - fixo outro setor"),
+                ("Extra interno", colaboradores[colaboradores.apply(is_internal_extra, axis=1)], lambda r: can_work_sector(r, setor, secondary=False) or can_work_sector(r, setor, secondary=True), "Auto - extra interno"),
+                ("Extra externo", colaboradores[(colaboradores["tipo"].astype(str).str.strip().str.lower() == "extra") & (~colaboradores.apply(is_internal_extra, axis=1))], lambda r: can_work_sector(r, setor, secondary=False) or can_work_sector(r, setor, secondary=True), "Auto - extra externo"),
+            ]
+
+            filled = False
+            for label, pool, sector_filter, origem in stages:
+                candidates = []
+                block_reasons: list[str] = []
+                for _, candidate in pool.iterrows():
+                    if not sector_filter(candidate):
+                        continue
+                    covering_indices = covering_row_indices(schedule, str(candidate.get("nome", "")).strip(), current, periodo)
+                    reassign_indices = [idx for idx in covering_indices if can_reassign_covering_row(schedule, ideal, idx, setor, periodo)]
+                    if reassign_indices:
+                        candidate = candidate.copy()
+                        candidate["_reassign_index"] = reassign_indices[0]
+                        candidates.append(candidate)
+                        continue
+                    ok, reason = can_be_auto_added(candidate, schedule, current, periodo, eventos, ajustes, domingo_especial)
+                    if ok:
+                        candidate = candidate.copy()
+                        candidate["_reassign_index"] = None
+                        candidates.append(candidate)
+                    elif reason:
+                        block_reasons.append(reason)
+                if not candidates:
+                    attempts.append(f"{label}: sem candidato disponível" + (f" ({sorted(set(block_reasons))[0]})" if block_reasons else ""))
+                    continue
+
+                candidates_df = pd.DataFrame(candidates)
+                if origem in {"Auto - extra interno", "Auto - extra externo"}:
+                    candidates_df["_rodizio"] = candidates_df["nome"].astype(str).map(lambda n: extra_count.get(n.strip(), 0))
+                    candidates_df = candidates_df.sort_values(["_rodizio", "nome"])
+                else:
+                    candidates_df = candidates_df.sort_values(["nome"])
+                chosen = candidates_df.iloc[0]
+                reassign_index = chosen.get("_reassign_index")
+                if pd.notna(reassign_index):
+                    schedule.loc[int(reassign_index), "setor"] = setor
+                    schedule.loc[int(reassign_index), "origem"] = origem
+                    schedule.loc[int(reassign_index), "observacao"] = f"Realocado automaticamente para cobrir {setor} / {periodo}."
+                else:
+                    schedule = add_schedule_row(schedule, chosen, current, periodo, setor, origem, domingo_especial)
+                chosen_name = str(chosen.get("nome", "")).strip()
+                if chosen_name in extra_count:
+                    extra_count[chosen_name] += 1
+                changed = True
+                filled = True
+                break
+
+            if not filled:
+                reasons[(dia, periodo, setor)] = "; ".join(attempts) or "nenhuma opção de preenchimento encontrada"
+
+        if not changed:
+            break
+
+    return schedule.sort_values(["data", "periodo", "setor", "horario", "nome"]).reset_index(drop=True), reasons
 
 
 def suggest_extras(
@@ -385,74 +618,9 @@ def suggest_extras(
     start: date,
     domingo_especial: bool = False,
 ) -> pd.DataFrame:
-    """Adiciona sugestões de extras para cobrir faltas, respeitando setor e rodízio simples."""
-    schedule = schedule.copy()
-    extras = colaboradores[colaboradores["tipo"].astype(str).str.strip().str.lower() == "extra"].copy()
-    if extras.empty:
-        return schedule
-
-    extra_count = {str(n).strip(): 0 for n in extras["nome"].astype(str)}
-    # Conta extras já manuais/base se houver
-    if not schedule.empty:
-        for nome in extra_count:
-            extra_count[nome] += int((schedule["nome"].astype(str).str.strip().str.lower() == nome.lower()).sum())
-
-    summary = coverage_summary(schedule, ideal)
-    additions = []
-    for _, gap in summary[summary["faltam"] > 0].iterrows():
-        dia = str(gap["dia"])
-        periodo = str(gap["periodo"])
-        setor = str(gap["setor"])
-        current_dates = [d for d in date_range(start) if DIAS_PT[d.weekday()] == dia]
-        if not current_dates:
-            continue
-        current = current_dates[0]
-        if dia == "Domingo" and periodo == "Manhã" and not domingo_especial:
-            continue
-        needed = int(gap["faltam"])
-        candidates = extras[extras["setor_escala"].astype(str).str.strip().str.lower() == setor.lower()].copy()
-        # Extra só é sugerido automaticamente no período padrão dele.
-        # Ex.: Lairton/Bruno/Denner/Anderson/Rafael Lisbinski entram no período Noite;
-        # Daia - Extra e Hemerson - Extra entram no período Manhã.
-        if "periodo_padrao" in candidates.columns:
-            period_mask = candidates["periodo_padrao"].astype(str).str.strip().str.lower() == periodo.lower()
-            candidates = candidates[period_mask].copy()
-        if candidates.empty:
-            continue
-        # Evita colocar o mesmo extra duas vezes no mesmo dia.
-        scheduled_names_today = set(schedule[schedule["data"] == current.isoformat()]["nome"].astype(str).str.strip().str.lower())
-        for _ in range(needed):
-            available = []
-            for _, ex in candidates.iterrows():
-                name = str(ex["nome"]).strip()
-                if name.lower() in scheduled_names_today:
-                    continue
-                folga = normalize_day(ex.get("folga_fixa", ""))
-                if folga and folga != "Não" and folga == dia:
-                    continue
-                available.append(ex)
-            if not available:
-                break
-            available_df = pd.DataFrame(available)
-            available_df["_count"] = available_df["nome"].astype(str).map(lambda n: extra_count.get(n.strip(), 0))
-            chosen = available_df.sort_values(["_count", "nome"]).iloc[0]
-            name = str(chosen["nome"]).strip()
-            extra_count[name] = extra_count.get(name, 0) + 1
-            scheduled_names_today.add(name.lower())
-            additions.append({
-                "data": current.isoformat(),
-                "dia": dia,
-                "periodo": periodo,
-                "setor": setor,
-                "funcao": str(chosen.get("funcao", "Extra")).strip(),
-                "nome": name,
-                "horario": str(chosen.get("horario_padrao", "")).strip(),
-                "origem": "Sugestão extra",
-                "observacao": "Sugerido automaticamente para fechar quadro ideal.",
-            })
-            schedule = pd.concat([schedule, pd.DataFrame([additions[-1]])], ignore_index=True)
-    return schedule.sort_values(["data", "periodo", "setor", "horario", "nome"]).reset_index(drop=True)
-
+    """Compatibilidade: usa a nova rotina de preenchimento automático."""
+    filled, _ = auto_fill_coverage(schedule, colaboradores, ideal, pd.DataFrame(), pd.DataFrame(), start, domingo_especial=domingo_especial)
+    return filled
 
 def generate_schedule(
     colaboradores: pd.DataFrame,
@@ -464,9 +632,18 @@ def generate_schedule(
     sugerir_extras: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     base = generate_base_schedule(colaboradores, eventos, ajustes, start, domingo_especial=domingo_especial)
+    reasons: dict[tuple[str, str, str], str] = {}
     if sugerir_extras:
-        base = suggest_extras(base, colaboradores, ideal, start, domingo_especial=domingo_especial)
-    summary = coverage_summary(base, ideal)
+        base, reasons = auto_fill_coverage(
+            base,
+            colaboradores,
+            ideal,
+            eventos,
+            ajustes,
+            start,
+            domingo_especial=domingo_especial,
+        )
+    summary = coverage_summary(base, ideal, reasons=reasons)
     return base, summary
 
 
@@ -497,7 +674,12 @@ def whatsapp_text(schedule: pd.DataFrame, summary: pd.DataFrame | None = None) -
             if not day_summary.empty:
                 lines.append("\n*ALERTAS DE COBERTURA:*")
                 for _, s in day_summary.iterrows():
-                    lines.append(f"Faltam {int(s['faltam'])} em {s['setor']} / {s['periodo']}")
+                    motivo = str(s.get("motivo_falta", "")).strip() or "opções automáticas esgotadas"
+                    lines.append(
+                        f"Dia: {s['dia']} | Período: {s['periodo']} | Setor: {s['setor']} | "
+                        f"Ideal: {int(s['ideal'])} | Escalado: {int(s['escalado'])} | "
+                        f"Faltante: {int(s['faltam'])} | Motivo: {motivo}"
+                    )
         lines.append("\n")
     return "\n".join(lines).strip()
 
