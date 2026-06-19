@@ -167,12 +167,36 @@ def manual_actions_for_date(ajustes: pd.DataFrame, current: date) -> pd.DataFram
     return ajustes[parsed == current].copy()
 
 
+
+def normalize_action(value: object) -> str:
+    text = str(value).strip().upper()
+    mapping = {
+        "ALTERAR HORÁRIO": "ALTERAR_HORARIO",
+        "ALTERAR HORARIO": "ALTERAR_HORARIO",
+        "ENTRAR MAIS CEDO": "ALTERAR_HORARIO",
+        "TROCAR SETOR": "ALTERAR_SETOR",
+        "ADICIONAR EXTRA": "ESCALAR",
+        "REMOVER DA ESCALA": "FOLGAR",
+        "MARCAR FOLGA": "FOLGAR",
+        "TRABALHAR NO DOMINGO": "ESCALAR",
+        "INCLUIR NO PERÍODO": "ESCALAR",
+        "INCLUIR NO PERIODO": "ESCALAR",
+        "OBSERVAÇÃO": "OBSERVACAO",
+        "OBSERVACAO": "OBSERVACAO",
+        "ESCALAR": "ESCALAR",
+        "FOLGAR": "FOLGAR",
+        "ALTERAR_HORARIO": "ALTERAR_HORARIO",
+        "ALTERAR_SETOR": "ALTERAR_SETOR",
+        "ALTERAR_PERIODO": "ALTERAR_PERIODO",
+    }
+    return mapping.get(text, text)
+
 def has_manual_escalar(nome: str, current: date, ajustes: pd.DataFrame) -> bool:
     acts = manual_actions_for_date(ajustes, current)
     if acts.empty:
         return False
     mask = acts["nome"].astype(str).str.strip().str.lower() == str(nome).strip().lower()
-    mask &= acts["acao"].astype(str).str.strip().str.upper() == "ESCALAR"
+    mask &= acts["acao"].map(normalize_action) == "ESCALAR"
     return bool(mask.any())
 
 
@@ -289,7 +313,7 @@ def apply_manual_adjustments(schedule: pd.DataFrame, colaboradores: pd.DataFrame
         current_date = parse_date(act.get("data", ""))
         current = current_date.isoformat() if current_date else str(act.get("data", "")).strip()
         nome = str(act.get("nome", "")).strip()
-        acao = str(act.get("acao", "")).strip().upper()
+        acao = normalize_action(act.get("acao", ""))
         if not current or not nome or not acao:
             continue
         mask = (schedule["data"].astype(str) == current) & (schedule["nome"].astype(str).str.strip().str.lower() == nome.lower())
@@ -305,6 +329,9 @@ def apply_manual_adjustments(schedule: pd.DataFrame, colaboradores: pd.DataFrame
                     schedule.loc[mask, "horario"] = str(act.get("horario", "")).strip()
                 if str(act.get("observacao", "")).strip():
                     schedule.loc[mask, "observacao"] = str(act.get("observacao", "")).strip()
+        elif acao == "OBSERVACAO":
+            if mask.any() and str(act.get("observacao", "")).strip():
+                schedule.loc[mask, "observacao"] = str(act.get("observacao", "")).strip()
         elif acao == "ESCALAR":
             emp = colaboradores[colaboradores["nome"].astype(str).str.strip().str.lower() == nome.lower()]
             funcao = ""
@@ -665,7 +692,13 @@ def generate_schedule(
     return base, summary
 
 
-def whatsapp_text(schedule: pd.DataFrame, summary: pd.DataFrame | None = None) -> str:
+def whatsapp_text(
+    schedule: pd.DataFrame,
+    summary: pd.DataFrame | None = None,
+    colaboradores: pd.DataFrame | None = None,
+    eventos: pd.DataFrame | None = None,
+    start: date | None = None,
+) -> str:
     if schedule.empty:
         return "Nenhuma escala gerada."
     lines: list[str] = []
@@ -687,6 +720,12 @@ def whatsapp_text(schedule: pd.DataFrame, summary: pd.DataFrame | None = None) -
                     extra_tag = " (extra)" if origem == "Sugestão extra" else ""
                     funcao_txt = f" — {funcao}" if funcao and funcao.lower() not in {setor.lower(), "garçom"} else ""
                     lines.append(f"{setor}{funcao_txt} — {horario} — {nome}{extra_tag}")
+        if colaboradores is not None and start is not None:
+            folgas = day_absences(dt, schedule, colaboradores, eventos)
+            if folgas:
+                lines.append("\n*FOLGAS / AUSÊNCIAS:*")
+                lines.extend(f"- {nome}" for nome in folgas)
+
         if summary is not None and not summary.empty:
             day_summary = summary[(summary["dia"].str.upper() == dia) & (summary["faltam"] > 0)]
             if not day_summary.empty:
@@ -825,6 +864,7 @@ def to_excel_bytes(
     output = io.BytesIO()
     por_colaborador, por_dia, cobertura = build_excel_sheets(schedule, summary, colaboradores, eventos, start)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        visual.to_excel(writer, index=False, sheet_name="Escala Semanal Visual")
         por_colaborador.to_excel(writer, index=False, sheet_name="Escala por Colaborador")
         por_dia.to_excel(writer, index=False, sheet_name="Escala por Dia")
         cobertura.to_excel(writer, index=False, sheet_name="Cobertura")

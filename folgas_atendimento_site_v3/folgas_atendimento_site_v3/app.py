@@ -6,6 +6,9 @@ import streamlit as st
 
 from escala_engine import (
     DATA_DIR,
+    build_weekly_visual_rows,
+    collaborator_kind_map,
+    coverage_diagnostics,
     generate_schedule,
     load_csv,
     save_csv,
@@ -17,6 +20,27 @@ st.set_page_config(page_title="FOLGAS ATENDIMENTO", layout="wide")
 
 DIAS_SEMANA = ["Sábado", "Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta"]
 TIPOS_EVENTO = ["Folga", "Férias", "Afastamento", "Ajuste Manual", "DOM", "DOM/SEM", "DIA/DOM/SEM"]
+ACOES_AJUSTE = [
+    "Alterar horário",
+    "Entrar mais cedo",
+    "Trocar setor",
+    "Adicionar extra",
+    "Remover da escala",
+    "Marcar folga",
+    "Trabalhar no domingo",
+    "Incluir no período",
+    "Observação",
+]
+ACOES_LEGADAS = {
+    "ESCALAR": "Adicionar extra",
+    "FOLGAR": "Marcar folga",
+    "ALTERAR_HORARIO": "Alterar horário",
+    "ALTERAR_SETOR": "Trocar setor",
+    "ALTERAR_PERIODO": "Incluir no período",
+}
+SETORES_OFICIAIS = ["Praça", "Copa", "Caixa", "Escritório", "Entrega"]
+PERIODOS_OFICIAIS = ["Manhã", "Tarde", "Noite"]
+HORARIOS_CONHECIDOS = ["08:30", "08:40", "10:30", "11:00", "11:30", "12:00", "14:30", "16:00", "16:30", "18:00", "18:30", "19:00", "19:30"]
 
 st.markdown(
     """
@@ -157,7 +181,7 @@ ajustes = cache["ajustes"]
 
 colaborador_nomes = sorted(colaboradores.get("nome", pd.Series(dtype=str)).astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist())
 eventos_display = normalize_date_columns(eventos, ["data_inicio", "data_fim"])
-ajustes_display = normalize_date_columns(ajustes, ["data"])
+ajustes_display = prepare_ajustes_display(ajustes)
 
 with st.sidebar:
     st.header("Geração")
@@ -222,6 +246,19 @@ Use **Ajustes semanais** para decisões manuais da gestão. Exemplos de ação: 
 
     st.divider()
     st.write("### Ajustes semanais manuais")
+    with st.expander("Ações disponíveis", expanded=True):
+        st.table(pd.DataFrame([
+            {"Ação": "Alterar horário", "Quando usar": "Muda o horário de entrada do colaborador naquele dia."},
+            {"Ação": "Entrar mais cedo", "Quando usar": "Antecipa o colaborador para um horário definido manualmente."},
+            {"Ação": "Trocar setor", "Quando usar": "Muda o setor do colaborador naquele dia/período."},
+            {"Ação": "Adicionar extra", "Quando usar": "Inclui um extra manualmente no dia/período/setor."},
+            {"Ação": "Remover da escala", "Quando usar": "Retira o colaborador daquele dia/período."},
+            {"Ação": "Marcar folga", "Quando usar": "Marca folga manual naquele dia."},
+            {"Ação": "Trabalhar no domingo", "Quando usar": "Permite escalar manualmente alguém que normalmente folga domingo."},
+            {"Ação": "Incluir no período", "Quando usar": "Força a inclusão do colaborador em um período específico."},
+            {"Ação": "Observação", "Quando usar": "Registra uma informação sem alterar automaticamente a escala."},
+        ]))
+
     edited_ajustes = st.data_editor(
         ajustes_display,
         num_rows="dynamic",
@@ -233,7 +270,13 @@ Use **Ajustes semanais** para decisões manuais da gestão. Exemplos de ação: 
         save_and_rerun(normalize_date_columns(edited_ajustes, ["data"]), "ajustes_semanais.csv")
 
 with tab4:
-    st.subheader("Escala semanal gerada")
+    st.subheader("Escala Semanal")
+    st.caption("Selecione a semana na lateral e use os botões abaixo para gerar, imprimir ou baixar os relatórios.")
+    action_cols = st.columns([1, 1, 4])
+    with action_cols[0]:
+        st.button("Gerar Sugestão", type="primary")
+    with action_cols[1]:
+        st.button("Imprimir", help="Use Ctrl+P / Cmd+P para imprimir os cards da escala.")
     schedule, summary = generate_schedule(
         colaboradores=colaboradores,
         ideal=quadro,
@@ -277,8 +320,16 @@ with tab4:
     else:
         st.info("Nenhum quadro ideal encontrado.")
 
+    st.write("### Diagnóstico de cobertura")
+    diagnostico = coverage_diagnostics(summary, colaboradores, schedule, eventos, start_date)
+    if not diagnostico.empty:
+        st.markdown('<div class="coverage-help">Use esta área para entender se a falta é de cadastro, disponibilidade, extra ou excesso no quadro ideal.</div>', unsafe_allow_html=True)
+        st.dataframe(diagnostico, width="stretch", hide_index=True)
+    else:
+        st.info("Não há dados suficientes para diagnóstico de cobertura.")
+
     st.write("### Texto pronto para WhatsApp")
-    text = whatsapp_text(schedule, summary)
+    text = whatsapp_text(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date)
     st.text_area("Copie e cole no grupo", value=text, height=420)
 
     st.download_button("Baixar texto para WhatsApp (.txt)", data=text.encode("utf-8"), file_name="escala_whatsapp.txt", mime="text/plain")
