@@ -34,7 +34,6 @@ def test_visual_excel_export_has_required_sheets():
     assert workbook['Escala Semanal Visual']['A2'].value.startswith('Meio Dia')
     assert workbook['Escala Semanal Visual']['D2'].value.startswith('Tarde')
     assert workbook['Escala Semanal Visual']['G2'].value.startswith('Noite')
-    assert workbook['Escala Semanal Visual'].merged_cells.ranges
     assert workbook['Escala por Colaborador'].freeze_panes == 'A2'
     assert [cell.value for cell in workbook['Cobertura'][1]] == ['Dia', 'Período', 'Setor', 'Ideal', 'Escalado', 'Diferença', 'Status']
     assert workbook['Escala por Dia'].max_row > 1

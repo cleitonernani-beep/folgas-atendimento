@@ -166,13 +166,6 @@ def prepare_ajustes_display(df: pd.DataFrame) -> pd.DataFrame:
         df["acao"] = df["acao"].map(display_action)
     return df
 
-
-def ensure_colaborador_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    if "carga_horaria" not in df.columns:
-        df["carga_horaria"] = "7"
-    return df
-
 st.caption("Operação semanal por dia, período, setor, função, colaborador, horário de entrada, folgas, férias, afastamentos e extras.")
 
 DATA_DIR.mkdir(exist_ok=True)

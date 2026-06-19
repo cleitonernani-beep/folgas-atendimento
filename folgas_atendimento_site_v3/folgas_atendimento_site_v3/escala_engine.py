@@ -1006,10 +1006,16 @@ def _style_worksheet(sheet) -> None:
         sheet.row_dimensions[row].height = 48
 
 
+def _period_count(schedule: pd.DataFrame, dia: str, periodo: str) -> int:
+    if schedule.empty:
+        return 0
+    return int(((schedule["dia"] == dia) & (schedule["periodo"] == periodo)).sum())
+
+
 def _visual_period_rows(day_df: pd.DataFrame, periodo: str) -> list[dict[str, str]]:
     if day_df.empty:
         return []
-    per_df = day_df[day_df.apply(lambda row: periodo in covered_periods(row), axis=1)].sort_values(["setor", "horario", "nome"])
+    per_df = day_df[day_df["periodo"] == periodo].sort_values(["setor", "horario", "nome"])
     return [
         {
             "setor": str(row.get("setor", "")).strip(),
@@ -1024,14 +1030,11 @@ def _write_visual_schedule_sheet(
     sheet,
     schedule: pd.DataFrame,
     start: date | None,
-    colaboradores: pd.DataFrame | None = None,
-    eventos: pd.DataFrame | None = None,
     domingo_especial: bool = False,
 ) -> None:
     title_fill = PatternFill("solid", fgColor="FACC15")
     period_fill = PatternFill("solid", fgColor="EAF2FB")
     grid_fill = PatternFill("solid", fgColor="F8FAFC")
-    absence_fill = PatternFill("solid", fgColor="F0FDF4")
     header_font = Font(color="0F2742", bold=True)
     name_font = Font(color="111827", bold=True)
     thin = Side(style="thin", color="CBD5E1")
@@ -1066,16 +1069,12 @@ def _write_visual_schedule_sheet(
             cell.fill = title_fill
             cell.border = border
 
-        morning = _visual_period_rows(day_df, "Manhã")
-        afternoon = _visual_period_rows(day_df, "Tarde")
-        night = _visual_period_rows(day_df, "Noite")
-
         current_row += 1
         morning_label = "Meio Dia" if not (current.weekday() == 6 and not domingo_especial) else "Meio Dia (fechado)"
         headers = [
-            (1, 3, f"{morning_label} ({len(morning)})"),
-            (4, 6, f"Tarde ({len(afternoon)})"),
-            (7, 8, f"Noite ({len(night)})"),
+            (1, 3, f"{morning_label} ({_period_count(day_df, dia, 'Manhã')})"),
+            (4, 6, f"Tarde ({_period_count(day_df, dia, 'Tarde')})"),
+            (7, 8, f"Noite ({_period_count(day_df, dia, 'Noite')})"),
         ]
         for start_col, end_col, label in headers:
             sheet.merge_cells(start_row=current_row, start_column=start_col, end_row=current_row, end_column=end_col)
@@ -1087,6 +1086,9 @@ def _write_visual_schedule_sheet(
                 sheet.cell(current_row, col).fill = period_fill
                 sheet.cell(current_row, col).border = border
 
+        morning = _visual_period_rows(day_df, "Manhã")
+        afternoon = _visual_period_rows(day_df, "Tarde")
+        night = _visual_period_rows(day_df, "Noite")
         max_rows = max(len(morning), len(afternoon), len(night), 1)
 
         for offset in range(max_rows):
@@ -1105,25 +1107,10 @@ def _write_visual_schedule_sheet(
                 cell = sheet.cell(row_num, col, value)
                 cell.fill = grid_fill
                 cell.border = border
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
                 if col in {3, 6, 8} and value:
                     cell.font = name_font
             sheet.row_dimensions[row_num].height = 21
-
-        absence_row = current_row + 1 + max_rows
-        sheet.merge_cells(start_row=absence_row, start_column=1, end_row=absence_row, end_column=8)
-        absences = day_absences(current, schedule, colaboradores, eventos)
-        absence_text = f"Folgas: {', '.join(absences) if absences else 'Sem folgas registradas'}"
-        absence_cell = sheet.cell(absence_row, 1, absence_text)
-        absence_cell.fill = absence_fill
-        absence_cell.border = border
-        absence_cell.font = Font(color="111827")
-        absence_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        for col in range(1, 9):
-            cell = sheet.cell(absence_row, col)
-            cell.fill = absence_fill
-            cell.border = border
-        sheet.row_dimensions[absence_row].height = 24
 
         current_row += max_rows + 2
 
@@ -1143,7 +1130,7 @@ def to_excel_bytes(
         por_dia.to_excel(writer, index=False, sheet_name="Escala por Dia")
         cobertura.to_excel(writer, index=False, sheet_name="Cobertura")
         visual_sheet = writer.book.create_sheet("Escala Semanal Visual", 0)
-        _write_visual_schedule_sheet(visual_sheet, schedule, start, colaboradores, eventos, domingo_especial=domingo_especial)
+        _write_visual_schedule_sheet(visual_sheet, schedule, start, domingo_especial=domingo_especial)
         for sheet in writer.book.worksheets:
             if sheet.title != "Escala Semanal Visual":
                 _style_worksheet(sheet)
