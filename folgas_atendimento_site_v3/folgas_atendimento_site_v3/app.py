@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from pathlib import Path
-
 import pandas as pd
 import streamlit as st
 
@@ -15,7 +13,7 @@ from escala_engine import (
     whatsapp_text,
 )
 
-st.set_page_config(page_title="FOLGAS ATENDIMENTO — v4 visual Jones", layout="wide")
+st.set_page_config(page_title="FOLGAS ATENDIMENTO", layout="wide")
 
 DIAS_SEMANA = ["Sábado", "Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta"]
 TIPOS_EVENTO = ["Folga", "Férias", "Afastamento", "Ajuste Manual", "DOM", "DOM/SEM", "DIA/DOM/SEM"]
@@ -24,59 +22,74 @@ st.markdown(
     """
     <style>
     .stApp {
-        background: linear-gradient(135deg, #111814 0%, #18231d 45%, #2b2418 100%);
-        color: #fffaf0;
+        background: #f7f6f0;
+        color: #26342b;
     }
     [data-testid="stSidebar"] {
-        background: #0f1713;
-        border-right: 1px solid #c9a44a55;
+        background: #ffffff;
+        border-right: 1px solid #ded6c3;
     }
     .v4-hero {
-        padding: 28px 32px;
-        border-radius: 24px;
-        background: linear-gradient(120deg, #0e1712, #31472f 58%, #b89238);
-        border: 1px solid #e7d9aa;
-        box-shadow: 0 18px 45px rgba(0, 0, 0, .38);
+        padding: 26px 30px;
+        border-radius: 18px;
+        background: linear-gradient(120deg, #ffffff 0%, #f4efe3 62%, #e7d29a 100%);
+        border: 1px solid #ded6c3;
+        box-shadow: 0 10px 26px rgba(31, 63, 43, .10);
         margin-bottom: 18px;
     }
     .v4-hero h1 {
-        color: #fffdf4;
-        font-size: 2.4rem;
-        margin: 0;
-        letter-spacing: .04em;
+        color: #1f4e3d;
+        font-size: 2.35rem;
+        margin: 0 0 12px;
+        letter-spacing: .03em;
     }
-    .v4-hero p { color: #f7ebc6; font-size: 1.05rem; margin: 8px 0 0; }
+    .v4-hero h2 {
+        color: #6b5a2e !important;
+        font-size: 1.25rem;
+        margin: 0 0 8px;
+    }
+    .v4-hero p { color: #344238; font-size: 1.02rem; margin: 0; max-width: 1100px; }
+    .v4-objective {
+        background: #ffffff;
+        border: 1px solid #ded6c3;
+        border-left: 6px solid #6fa57b;
+        border-radius: 14px;
+        padding: 14px 18px;
+        margin: 12px 0 18px;
+        color: #26342b;
+    }
     div[data-testid="stMetric"] {
-        background: #f5ead0;
-        border: 1px solid #d6b86c;
-        border-radius: 18px;
-        padding: 16px;
-        box-shadow: 0 10px 28px rgba(0, 0, 0, .24);
+        background: #ffffff;
+        border: 1px solid #ded6c3;
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 6px 18px rgba(31, 63, 43, .08);
     }
-    div[data-testid="stMetric"] label, div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: #1b241d !important; }
+    div[data-testid="stMetric"] label, div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: #1f4e3d !important; }
     .stButton button, .stDownloadButton button {
-        background: linear-gradient(90deg, #d5b45b, #6fa57b) !important;
-        color: #102016 !important;
+        background: #1f7a4d !important;
+        color: #ffffff !important;
         border: 0 !important;
-        border-radius: 999px !important;
-        font-weight: 800 !important;
-        box-shadow: 0 8px 22px rgba(0, 0, 0, .28);
+        border-radius: 8px !important;
+        font-weight: 700 !important;
     }
     .stDataFrame, [data-testid="stDataEditor"] {
-        border: 1px solid #d6b86c88;
-        border-radius: 16px;
+        border: 1px solid #ded6c3;
+        border-radius: 12px;
         overflow: hidden;
-        background: #fffaf0;
+        background: #ffffff;
     }
-    div[data-testid="stTabs"] button { color: #fff8df; font-weight: 700; }
-    h2, h3 { color: #f2d890 !important; }
+    div[data-testid="stTabs"] button { color: #26342b; font-weight: 650; }
+    h2, h3 { color: #1f4e3d !important; }
     .v4-card {
-        padding: 16px 18px;
-        background: rgba(255, 250, 240, .10);
-        border: 1px solid rgba(214, 184, 108, .55);
-        border-radius: 18px;
+        padding: 14px 16px;
+        background: #ffffff;
+        border: 1px solid #ded6c3;
+        border-radius: 12px;
         margin: 10px 0 16px;
+        color: #26342b;
     }
+    .version-note { color: #6f6f6f; font-size: .86rem; margin-top: 18px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -85,8 +98,18 @@ st.markdown(
 st.markdown(
     """
     <div class="v4-hero">
-      <h1>FOLGAS ATENDIMENTO — v4 visual Jones</h1>
-      <p>Escala semanal com visual escuro, bege/dourado, branco e verde suave.</p>
+      <h1>FOLGAS ATENDIMENTO</h1>
+      <h2>Objetivo deste aplicativo</h2>
+      <p>Gerar uma escala semanal de atendimento, de sábado a sexta-feira, considerando colaboradores fixos, estagiários, extras, folgas, férias, afastamentos, horários de entrada e quadro ideal por setor.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="v4-objective">
+      <strong>Relatório semanal esperado:</strong> sábado com Manhã, Tarde e Noite; domingo normal com Tarde e Noite; domingo especial com Manhã, Tarde e Noite; segunda a sexta com Manhã, Tarde e Noite. O sistema usa somente o horário de entrada — sem calcular saída, jornada ou banco de horas.
     </div>
     """,
     unsafe_allow_html=True,
@@ -96,7 +119,9 @@ st.markdown(
 def br_date(value: object) -> str:
     if value is None or str(value).strip() == "":
         return ""
-    parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
+    text = str(value).strip()
+    dayfirst = not (len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-")
+    parsed = pd.to_datetime(text, dayfirst=dayfirst, errors="coerce")
     return "" if pd.isna(parsed) else parsed.strftime("%d/%m/%Y")
 
 
@@ -107,7 +132,7 @@ def normalize_date_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame
             df[column] = df[column].map(br_date)
     return df
 
-st.caption("Protótipo em Python/Streamlit para gerar escala semanal de sábado a sexta, considerando folgas, férias, desligamentos, quadro ideal e extras.")
+st.caption("Operação semanal por dia, período, setor, função, colaborador, horário de entrada, folgas, férias, afastamentos e extras.")
 
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -144,6 +169,7 @@ with st.sidebar:
     domingo_tipo = st.radio("Tipo de domingo", ["Normal — abre 16h", "Especial — abre 11h"], index=0)
     domingo_especial = domingo_tipo.startswith("Especial")
     sugerir_extras = st.checkbox("Sugerir extras automaticamente para fechar quadro", value=True)
+    st.markdown('<div class="version-note">Versão: v4.1 correção de estabilidade</div>', unsafe_allow_html=True)
 
 
 def save_and_rerun(df: pd.DataFrame, filename: str):
@@ -159,35 +185,11 @@ with tab1:
     st.subheader("Cadastro de colaboradores, estagiários e extras")
     st.info("Edite os dados e clique em salvar. Extras externos entram por sugestão automática; colaboradores fixos entram na base conforme folgas e ajustes.")
     st.markdown('<div class="v4-card">Planilha editável: inclua, remova ou ajuste colaboradores diretamente na grade.</div>', unsafe_allow_html=True)
-    colab_columns = {
-        "nome": "Colaborador",
-        "tipo": "Tipo",
-        "setor_cadastro": "Setor cadastro",
-        "setor_escala": "Setor escala",
-        "funcao": "Função",
-        "horario_padrao": "Horário padrão",
-        "periodo_padrao": "Período",
-        "folga_fixa": "Folga fixa",
-        "trabalha_domingo": "Trabalha domingo?",
-        "status": "Status",
-        "data_admissao": "Admissão",
-        "data_desligamento": "Desligamento",
-        "obs": "Observações",
-    }
     edited = st.data_editor(
         colaboradores,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
-        column_order=[col for col in colab_columns if col in colaboradores.columns],
-        column_config={
-            key: st.column_config.TextColumn(label) for key, label in colab_columns.items() if key in colaboradores.columns
-        } | {
-            "tipo": st.column_config.SelectboxColumn("Tipo", options=["Fixo", "Estagiário", "Extra"]),
-            "periodo_padrao": st.column_config.SelectboxColumn("Período", options=["Manhã", "Tarde", "Noite"]),
-            "folga_fixa": st.column_config.SelectboxColumn("Folga fixa", options=["Não", *DIAS_SEMANA]),
-            "status": st.column_config.SelectboxColumn("Status", options=["Ativo", "Inativo"]),
-        },
         key="colab_editor",
     )
     if st.button("Salvar colaboradores", type="primary"):
@@ -196,7 +198,7 @@ with tab1:
 with tab2:
     st.subheader("Quadro ideal por dia, período e setor")
     st.info("Essa tabela define quantas pessoas o sistema deve tentar cobrir por setor. Quando faltar, o sistema mostra alerta e pode sugerir extras.")
-    edited_quadro = st.data_editor(quadro, num_rows="dynamic", use_container_width=True, key="quadro_editor")
+    edited_quadro = st.data_editor(quadro, num_rows="dynamic", width="stretch", key="quadro_editor")
     if st.button("Salvar quadro ideal", type="primary"):
         save_and_rerun(edited_quadro, "quadro_ideal.csv")
 
@@ -211,16 +213,8 @@ Use **Ajustes semanais** para decisões manuais da gestão. Exemplos de ação: 
     edited_eventos = st.data_editor(
         eventos_display,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
-        column_config={
-            "tipo": st.column_config.SelectboxColumn("Tipo de evento", options=TIPOS_EVENTO),
-            "nome": st.column_config.SelectboxColumn("Colaborador", options=colaborador_nomes),
-            "data_inicio": st.column_config.DateColumn("Data início", format="DD/MM/YYYY"),
-            "data_fim": st.column_config.DateColumn("Data fim", format="DD/MM/YYYY"),
-            "dia_folga_semana": st.column_config.SelectboxColumn("Folga na semana", options=["", *DIAS_SEMANA]),
-            "observacao": st.column_config.TextColumn("Observação"),
-        },
         key="eventos_editor",
     )
     if st.button("Salvar eventos", type="primary"):
@@ -231,17 +225,8 @@ Use **Ajustes semanais** para decisões manuais da gestão. Exemplos de ação: 
     edited_ajustes = st.data_editor(
         ajustes_display,
         num_rows="dynamic",
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
-        column_config={
-            "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-            "nome": st.column_config.SelectboxColumn("Colaborador", options=colaborador_nomes),
-            "acao": st.column_config.SelectboxColumn("Ação", options=["ESCALAR", "FOLGAR", "ALTERAR_HORARIO", "ALTERAR_SETOR", "ALTERAR_PERIODO"]),
-            "setor": st.column_config.SelectboxColumn("Setor", options=["", "Praça", "Copa", "Caixa", "Escritório", "Entrega"]),
-            "periodo": st.column_config.SelectboxColumn("Período", options=["", "Manhã", "Tarde", "Noite"]),
-            "horario": st.column_config.TextColumn("Horário"),
-            "observacao": st.column_config.TextColumn("Observação"),
-        },
         key="ajustes_editor",
     )
     if st.button("Salvar ajustes semanais", type="primary"):
@@ -268,7 +253,7 @@ with tab4:
         st.metric("Sugestões de extras", int((schedule["origem"] == "Sugestão extra").sum()) if not schedule.empty and "origem" in schedule else 0)
 
     st.write("### Tabela da escala")
-    st.dataframe(schedule, use_container_width=True, hide_index=True)
+    st.dataframe(schedule, width="stretch", hide_index=True)
 
     st.write("### Conferência do quadro ideal")
     if not summary.empty:
@@ -278,6 +263,7 @@ with tab4:
             if row["sobra"] > 0:
                 return ["background-color: #fff4cc"] * len(row)
             return [""] * len(row)
+        st.dataframe(summary.style.apply(highlight_gap, axis=1), width="stretch", hide_index=True)
 
         st.dataframe(summary.style.apply(highlight_gap, axis=1), use_container_width=True, hide_index=True)
         faltas = summary[summary["faltam"] > 0].copy()
