@@ -354,7 +354,14 @@ with tab4:
     excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
     st.download_button(
         "Baixar Excel visual (.xlsx)",
-        data=to_excel_bytes(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date),
+        data=to_excel_bytes(
+            schedule,
+            summary,
+            colaboradores=colaboradores,
+            eventos=eventos,
+            start=start_date,
+            domingo_especial=domingo_especial,
+        ),
         file_name=excel_filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
