@@ -69,7 +69,9 @@ def parse_date(value: object) -> date | None:
     if not text:
         return None
     try:
-        return pd.to_datetime(text, dayfirst=False).date()
+        # A interface usa formato brasileiro (dd/mm/aaaa), mas mantemos
+        # compatibilidade com datas ISO já existentes nos CSVs.
+        return pd.to_datetime(text, dayfirst=True).date()
     except Exception:
         return None
 
@@ -143,8 +145,8 @@ def works_only_day(nome: str, current: date, eventos: pd.DataFrame) -> bool:
 def manual_actions_for_date(ajustes: pd.DataFrame, current: date) -> pd.DataFrame:
     if ajustes.empty or "data" not in ajustes.columns:
         return pd.DataFrame(columns=ajustes.columns if not ajustes.empty else [])
-    target = current.isoformat()
-    return ajustes[ajustes["data"].astype(str).str.strip() == target].copy()
+    parsed = ajustes["data"].map(parse_date)
+    return ajustes[parsed == current].copy()
 
 
 def has_manual_escalar(nome: str, current: date, ajustes: pd.DataFrame) -> bool:
@@ -266,7 +268,8 @@ def apply_manual_adjustments(schedule: pd.DataFrame, colaboradores: pd.DataFrame
         return schedule
     schedule = schedule.copy()
     for _, act in ajustes.iterrows():
-        current = str(act.get("data", "")).strip()
+        current_date = parse_date(act.get("data", ""))
+        current = current_date.isoformat() if current_date else str(act.get("data", "")).strip()
         nome = str(act.get("nome", "")).strip()
         acao = str(act.get("acao", "")).strip().upper()
         if not current or not nome or not acao:
@@ -499,9 +502,73 @@ def whatsapp_text(schedule: pd.DataFrame, summary: pd.DataFrame | None = None) -
     return "\n".join(lines).strip()
 
 
+def build_excel_sheets(schedule: pd.DataFrame, summary: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    dias_semana = ["Sábado", "Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta"]
+
+    if schedule.empty:
+        por_colaborador = pd.DataFrame(columns=["Colaborador", *dias_semana])
+        por_dia = pd.DataFrame(columns=["Dia", "Data", "Período", "Setor", "Horário", "Colaborador", "Função"])
+    else:
+        rows_colaborador = []
+        for nome, emp_df in schedule.groupby("nome", sort=True):
+            row = {"Colaborador": nome}
+            for dia in dias_semana:
+                dia_df = emp_df[emp_df["dia"] == dia].sort_values(["horario", "setor", "funcao"])
+                if dia_df.empty:
+                    row[dia] = "FOLGA"
+                else:
+                    partes = []
+                    for _, item in dia_df.iterrows():
+                        partes.append(
+                            " | ".join(
+                                str(item.get(col, "")).strip()
+                                for col in ["horario", "setor", "funcao"]
+                                if str(item.get(col, "")).strip()
+                            )
+                        )
+                    row[dia] = "\n".join(partes)
+            rows_colaborador.append(row)
+        por_colaborador = pd.DataFrame(rows_colaborador, columns=["Colaborador", *dias_semana])
+
+        por_dia = schedule.copy()
+        por_dia["Data"] = por_dia["data"].map(lambda value: pd.to_datetime(value).strftime("%d/%m/%Y") if str(value).strip() else "")
+        por_dia = por_dia.rename(
+            columns={
+                "dia": "Dia",
+                "periodo": "Período",
+                "setor": "Setor",
+                "horario": "Horário",
+                "nome": "Colaborador",
+                "funcao": "Função",
+            }
+        )[["Dia", "Data", "Período", "Setor", "Horário", "Colaborador", "Função"]]
+        por_dia = por_dia.sort_values(["Data", "Período", "Setor", "Horário", "Colaborador"])
+
+    cobertura = summary.copy() if summary is not None else pd.DataFrame()
+    if not cobertura.empty:
+        cobertura["diferença"] = cobertura["escalado"].astype(int) - cobertura["ideal"].astype(int)
+        cobertura["status"] = cobertura["diferença"].map(lambda diff: "OK" if diff == 0 else ("FALTA" if diff < 0 else "SOBRA"))
+        cobertura = cobertura.rename(columns={"dia": "Dia", "periodo": "Período", "setor": "Setor", "ideal": "Ideal", "escalado": "Escalado", "diferença": "Diferença", "status": "Status"})
+        cobertura = cobertura[["Dia", "Período", "Setor", "Ideal", "Escalado", "Diferença", "Status"]]
+    else:
+        cobertura = pd.DataFrame(columns=["Dia", "Período", "Setor", "Ideal", "Escalado", "Diferença", "Status"])
+
+    return por_colaborador, por_dia, cobertura
+
+
 def to_excel_bytes(schedule: pd.DataFrame, summary: pd.DataFrame) -> bytes:
     output = io.BytesIO()
+    por_colaborador, por_dia, cobertura = build_excel_sheets(schedule, summary)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        schedule.to_excel(writer, index=False, sheet_name="Escala")
-        summary.to_excel(writer, index=False, sheet_name="Cobertura")
+        por_colaborador.to_excel(writer, index=False, sheet_name="Escala por Colaborador")
+        por_dia.to_excel(writer, index=False, sheet_name="Escala por Dia")
+        cobertura.to_excel(writer, index=False, sheet_name="Cobertura")
+
+        for sheet in writer.book.worksheets:
+            sheet.freeze_panes = "A2"
+            for column_cells in sheet.columns:
+                max_len = max(len(str(cell.value or "")) for cell in column_cells)
+                sheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_len + 2, 14), 42)
+                for cell in column_cells:
+                    cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
     return output.getvalue()
