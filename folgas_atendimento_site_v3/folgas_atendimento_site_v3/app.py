@@ -288,7 +288,13 @@ with tab4:
 
     st.download_button("Baixar texto para WhatsApp (.txt)", data=text.encode("utf-8"), file_name="escala_whatsapp.txt", mime="text/plain")
     st.download_button("Baixar escala em CSV", data=schedule.to_csv(index=False).encode("utf-8"), file_name="escala_semanal.csv", mime="text/csv")
-    st.download_button("Baixar Excel com escala e cobertura", data=to_excel_bytes(schedule, summary), file_name="escala_semanal.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
+    st.download_button(
+        "Baixar Excel visual (.xlsx)",
+        data=to_excel_bytes(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date),
+        file_name=excel_filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 with tab5:
     st.subheader("Regras implementadas nesta versão")
