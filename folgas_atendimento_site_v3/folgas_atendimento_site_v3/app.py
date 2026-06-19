@@ -278,7 +278,16 @@ with tab4:
             if row["sobra"] > 0:
                 return ["background-color: #fff4cc"] * len(row)
             return [""] * len(row)
+
         st.dataframe(summary.style.apply(highlight_gap, axis=1), use_container_width=True, hide_index=True)
+        faltas = summary[summary["faltam"] > 0].copy()
+        if not faltas.empty:
+            st.error("Alertas finais após tentativa automática de preenchimento")
+            st.dataframe(
+                faltas[["dia", "periodo", "setor", "ideal", "escalado", "faltam", "motivo_falta"]],
+                use_container_width=True,
+                hide_index=True,
+            )
     else:
         st.info("Nenhum quadro ideal encontrado.")
 
