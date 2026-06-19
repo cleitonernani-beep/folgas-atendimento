@@ -741,6 +741,146 @@ def whatsapp_text(
     return "\n".join(lines).strip()
 
 
+def collaborator_kind_map(colaboradores: pd.DataFrame | None) -> dict[str, str]:
+    if colaboradores is None or colaboradores.empty or "nome" not in colaboradores:
+        return {}
+    return {
+        str(row.get("nome", "")).strip().lower(): str(row.get("tipo", "")).strip()
+        for _, row in colaboradores.iterrows()
+    }
+
+
+def schedule_item_text(row: pd.Series, tipo_map: dict[str, str] | None = None) -> str:
+    tipo_map = tipo_map or {}
+    nome = str(row.get("nome", "")).strip()
+    setor = str(row.get("setor", "")).strip()
+    horario = str(row.get("horario", "")).strip()
+    funcao = str(row.get("funcao", "")).strip()
+    origem = str(row.get("origem", "")).strip()
+    tags = []
+    if origem in {"Sugestão extra", "Manual"} or tipo_map.get(nome.lower(), "").lower() == "extra":
+        tags.append("EXTRA")
+    if tipo_map.get(nome.lower(), "").lower().startswith("estagi"):
+        tags.append("ESTAGIÁRIO")
+    tag_txt = f" [{' / '.join(tags)}]" if tags else ""
+    funcao_txt = f" - {funcao}" if funcao else ""
+    return f"{setor} | {horario} | {nome}{funcao_txt}{tag_txt}"
+
+
+def day_absences(
+    day: date,
+    schedule: pd.DataFrame,
+    colaboradores: pd.DataFrame | None = None,
+    eventos: pd.DataFrame | None = None,
+) -> list[str]:
+    if colaboradores is None or colaboradores.empty or "nome" not in colaboradores:
+        return []
+    scheduled = set()
+    if not schedule.empty and "data" in schedule and "nome" in schedule:
+        scheduled = set(schedule[schedule["data"] == day.isoformat()]["nome"].astype(str).str.strip().str.lower())
+    absences = []
+    eventos = eventos if eventos is not None else pd.DataFrame()
+    for _, emp in colaboradores.iterrows():
+        nome = str(emp.get("nome", "")).strip()
+        if not nome or nome.lower() in scheduled:
+            continue
+        status, _ = employee_event_status(nome, day, eventos)
+        if status:
+            absences.append(f"{nome} ({status})")
+            continue
+        if not employee_active(emp, day, eventos):
+            continue
+        folga_fixa = normalize_day(emp.get("folga_fixa", ""))
+        if explicit_folga(nome, day, eventos) or (folga_fixa and folga_fixa != "Não" and folga_fixa == DIAS_PT[day.weekday()]):
+            absences.append(nome)
+    return sorted(absences)
+
+
+def build_weekly_visual_rows(
+    schedule: pd.DataFrame,
+    start: date,
+    colaboradores: pd.DataFrame | None = None,
+    eventos: pd.DataFrame | None = None,
+    domingo_especial: bool = False,
+) -> pd.DataFrame:
+    tipo_map = collaborator_kind_map(colaboradores)
+    rows = []
+    for current in date_range(start):
+        day_df = schedule[schedule["data"] == current.isoformat()].copy() if not schedule.empty and "data" in schedule else pd.DataFrame()
+        row = {"Dia": f"{DIAS_PT[current.weekday()].upper()} {current.strftime('%d/%m')}"}
+        for label, periodo in [("Meio Dia / Manhã", "Manhã"), ("Tarde", "Tarde"), ("Noite", "Noite")]:
+            if current.weekday() == 6 and periodo == "Manhã" and not domingo_especial:
+                row[label] = "FECHADO"
+                continue
+            per_df = day_df[day_df["periodo"] == periodo].sort_values(["setor", "horario", "nome"]) if not day_df.empty else pd.DataFrame()
+            row[label] = "\n".join(schedule_item_text(item, tipo_map) for _, item in per_df.iterrows()) if not per_df.empty else ""
+        row["Folgas"] = "\n".join(day_absences(current, schedule, colaboradores, eventos))
+        rows.append(row)
+    return pd.DataFrame(rows, columns=["Dia", "Meio Dia / Manhã", "Tarde", "Noite", "Folgas"])
+
+
+def coverage_diagnostics(
+    summary: pd.DataFrame,
+    colaboradores: pd.DataFrame,
+    schedule: pd.DataFrame,
+    eventos: pd.DataFrame,
+    start: date,
+) -> pd.DataFrame:
+    columns = ["Dia", "Período", "Setor", "Ideal", "Escalado", "Falta", "Status", "Cadastrados no setor", "Disponíveis", "Removidos por ausência", "Extras possíveis", "Motivo provável"]
+    if summary is None or summary.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    colaboradores = colaboradores if colaboradores is not None else pd.DataFrame()
+    eventos = eventos if eventos is not None else pd.DataFrame()
+    for _, gap in summary.iterrows():
+        falta = int(gap.get("faltam", 0))
+        sobra = int(gap.get("sobra", 0))
+        status = "Cobertura OK" if falta <= 0 and sobra <= 0 else ("Falta real após tentativa de preenchimento" if falta > 0 else "Excedente")
+        dia = str(gap.get("dia", ""))
+        setor = str(gap.get("setor", ""))
+        periodo = str(gap.get("periodo", ""))
+        current = next((d for d in date_range(start) if DIAS_PT[d.weekday()] == dia), start)
+        if colaboradores.empty:
+            compatible = pd.DataFrame()
+        else:
+            setor_mask = colaboradores.get("setor_escala", pd.Series(dtype=str)).astype(str).str.lower().eq(setor.lower())
+            secondary_mask = colaboradores.get("setores_secundarios", pd.Series(dtype=str)).astype(str).str.lower().str.contains(setor.lower(), na=False)
+            compatible = colaboradores[setor_mask | secondary_mask].copy()
+        removed = available = extras_possible = 0
+        for _, emp in compatible.iterrows():
+            tipo = str(emp.get("tipo", "")).strip().lower()
+            nome = str(emp.get("nome", "")).strip()
+            active = employee_active(emp, current, eventos) and not explicit_folga(nome, current, eventos)
+            if active:
+                available += 1
+                if tipo == "extra":
+                    extras_possible += 1
+            else:
+                removed += 1
+        motivo = str(gap.get("motivo_falta", "")).strip()
+        if not motivo:
+            if falta <= 0 and sobra <= 0:
+                motivo = "Quadro ideal atendido."
+            elif sobra > 0:
+                motivo = "Há mais pessoas escaladas do que o ideal para este recorte."
+            elif extras_possible == 0:
+                motivo = "Não há extras cadastrados disponíveis para este setor."
+            elif available == 0:
+                motivo = "Todos os colaboradores compatíveis estão de folga/férias/afastados."
+            elif len(compatible) < int(gap.get("ideal", 0)):
+                motivo = "Quadro ideal exige mais pessoas do que o cadastro disponível."
+            else:
+                motivo = "Falta configurar disponibilidade dos extras ou revisar ajustes manuais."
+        rows.append({
+            "Dia": dia, "Período": periodo, "Setor": setor, "Ideal": int(gap.get("ideal", 0)),
+            "Escalado": int(gap.get("escalado", 0)), "Falta": falta, "Status": status,
+            "Cadastrados no setor": int(len(compatible)), "Disponíveis": int(available),
+            "Removidos por ausência": int(removed), "Extras possíveis": int(extras_possible),
+            "Motivo provável": motivo,
+        })
+    return pd.DataFrame(rows, columns=columns)
+
+
 def build_excel_sheets(
     schedule: pd.DataFrame,
     summary: pd.DataFrame,
@@ -854,20 +994,132 @@ def _style_worksheet(sheet) -> None:
         sheet.row_dimensions[row].height = 48
 
 
+def _period_count(schedule: pd.DataFrame, dia: str, periodo: str) -> int:
+    if schedule.empty:
+        return 0
+    return int(((schedule["dia"] == dia) & (schedule["periodo"] == periodo)).sum())
+
+
+def _visual_period_rows(day_df: pd.DataFrame, periodo: str) -> list[dict[str, str]]:
+    if day_df.empty:
+        return []
+    per_df = day_df[day_df["periodo"] == periodo].sort_values(["setor", "horario", "nome"])
+    return [
+        {
+            "setor": str(row.get("setor", "")).strip(),
+            "horario": str(row.get("horario", "")).strip(),
+            "nome": str(row.get("nome", "")).strip().upper(),
+        }
+        for _, row in per_df.iterrows()
+    ]
+
+
+def _write_visual_schedule_sheet(
+    sheet,
+    schedule: pd.DataFrame,
+    start: date | None,
+    domingo_especial: bool = False,
+) -> None:
+    title_fill = PatternFill("solid", fgColor="FACC15")
+    period_fill = PatternFill("solid", fgColor="EAF2FB")
+    grid_fill = PatternFill("solid", fgColor="F8FAFC")
+    header_font = Font(color="0F2742", bold=True)
+    name_font = Font(color="111827", bold=True)
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    widths = {
+        "A": 14, "B": 8, "C": 32,
+        "D": 14, "E": 8, "F": 32,
+        "G": 6, "H": 32,
+    }
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+    sheet.sheet_view.showGridLines = False
+    sheet.freeze_panes = "A2"
+
+    if start is None:
+        start = date.today()
+
+    current_row = 1
+    for current in date_range(start):
+        dia = DIAS_PT[current.weekday()]
+        day_df = schedule[schedule["data"] == current.isoformat()].copy() if not schedule.empty and "data" in schedule else pd.DataFrame()
+
+        sheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
+        title_cell = sheet.cell(current_row, 1, f"{dia.upper()} {current.strftime('%d/%m')}")
+        title_cell.fill = title_fill
+        title_cell.font = Font(color="0F2742", bold=True, size=12)
+        title_cell.alignment = Alignment(vertical="center")
+        sheet.row_dimensions[current_row].height = 24
+        for col in range(1, 9):
+            cell = sheet.cell(current_row, col)
+            cell.fill = title_fill
+            cell.border = border
+
+        current_row += 1
+        morning_label = "Meio Dia" if not (current.weekday() == 6 and not domingo_especial) else "Meio Dia (fechado)"
+        headers = [
+            (1, 3, f"{morning_label} ({_period_count(day_df, dia, 'Manhã')})"),
+            (4, 6, f"Tarde ({_period_count(day_df, dia, 'Tarde')})"),
+            (7, 8, f"Noite ({_period_count(day_df, dia, 'Noite')})"),
+        ]
+        for start_col, end_col, label in headers:
+            sheet.merge_cells(start_row=current_row, start_column=start_col, end_row=current_row, end_column=end_col)
+            cell = sheet.cell(current_row, start_col, label)
+            cell.fill = period_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            for col in range(start_col, end_col + 1):
+                sheet.cell(current_row, col).fill = period_fill
+                sheet.cell(current_row, col).border = border
+
+        morning = _visual_period_rows(day_df, "Manhã")
+        afternoon = _visual_period_rows(day_df, "Tarde")
+        night = _visual_period_rows(day_df, "Noite")
+        max_rows = max(len(morning), len(afternoon), len(night), 1)
+
+        for offset in range(max_rows):
+            row_num = current_row + 1 + offset
+            values = ["", "", "", "", "", "", "", ""]
+            if offset < len(morning):
+                values[0:3] = [morning[offset]["setor"], morning[offset]["horario"], morning[offset]["nome"]]
+            elif current.weekday() == 6 and not domingo_especial and offset == 0:
+                values[2] = "FECHADO"
+            if offset < len(afternoon):
+                values[3:6] = [afternoon[offset]["setor"], afternoon[offset]["horario"], afternoon[offset]["nome"]]
+            if offset < len(night):
+                values[6:8] = [str(offset + 1), night[offset]["nome"]]
+
+            for col, value in enumerate(values, start=1):
+                cell = sheet.cell(row_num, col, value)
+                cell.fill = grid_fill
+                cell.border = border
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                if col in {3, 6, 8} and value:
+                    cell.font = name_font
+            sheet.row_dimensions[row_num].height = 21
+
+        current_row += max_rows + 2
+
+
 def to_excel_bytes(
     schedule: pd.DataFrame,
     summary: pd.DataFrame,
     colaboradores: pd.DataFrame | None = None,
     eventos: pd.DataFrame | None = None,
     start: date | None = None,
+    domingo_especial: bool = False,
 ) -> bytes:
     output = io.BytesIO()
     por_colaborador, por_dia, cobertura = build_excel_sheets(schedule, summary, colaboradores, eventos, start)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        visual.to_excel(writer, index=False, sheet_name="Escala Semanal Visual")
         por_colaborador.to_excel(writer, index=False, sheet_name="Escala por Colaborador")
         por_dia.to_excel(writer, index=False, sheet_name="Escala por Dia")
         cobertura.to_excel(writer, index=False, sheet_name="Cobertura")
+        visual_sheet = writer.book.create_sheet("Escala Semanal Visual", 0)
+        _write_visual_schedule_sheet(visual_sheet, schedule, start, domingo_especial=domingo_especial)
         for sheet in writer.book.worksheets:
-            _style_worksheet(sheet)
+            if sheet.title != "Escala Semanal Visual":
+                _style_worksheet(sheet)
     return output.getvalue()

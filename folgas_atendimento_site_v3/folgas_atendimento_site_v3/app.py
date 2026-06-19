@@ -6,8 +6,6 @@ import streamlit as st
 
 from escala_engine import (
     DATA_DIR,
-    build_weekly_visual_rows,
-    collaborator_kind_map,
     coverage_diagnostics,
     generate_schedule,
     load_csv,
@@ -156,6 +154,18 @@ def normalize_date_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame
             df[column] = df[column].map(br_date)
     return df
 
+
+def display_action(value: object) -> str:
+    text = str(value).strip()
+    return ACOES_LEGADAS.get(text.upper(), text)
+
+
+def prepare_ajustes_display(df: pd.DataFrame) -> pd.DataFrame:
+    df = normalize_date_columns(df, ["data"])
+    if "acao" in df.columns:
+        df["acao"] = df["acao"].map(display_action)
+    return df
+
 st.caption("Operação semanal por dia, período, setor, função, colaborador, horário de entrada, folgas, férias, afastamentos e extras.")
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -274,18 +284,25 @@ with tab4:
     st.caption("Selecione a semana na lateral e use os botões abaixo para gerar, imprimir ou baixar os relatórios.")
     action_cols = st.columns([1, 1, 4])
     with action_cols[0]:
-        st.button("Gerar Sugestão", type="primary")
+        gerar_sugestao = st.button("Gerar Sugestão", type="primary")
     with action_cols[1]:
         st.button("Imprimir", help="Use Ctrl+P / Cmd+P para imprimir os cards da escala.")
-    schedule, summary = generate_schedule(
-        colaboradores=colaboradores,
-        ideal=quadro,
-        eventos=eventos,
-        ajustes=ajustes,
-        start=start_date,
-        domingo_especial=domingo_especial,
-        sugerir_extras=sugerir_extras,
-    )
+    if gerar_sugestao or "schedule_result" not in st.session_state:
+        if gerar_sugestao:
+            st.session_state.schedule_result = generate_schedule(
+                colaboradores=colaboradores,
+                ideal=quadro,
+                eventos=eventos,
+                ajustes=ajustes,
+                start=start_date,
+                domingo_especial=domingo_especial,
+                sugerir_extras=sugerir_extras,
+            )
+        else:
+            st.info("Clique em **Gerar Sugestão** para montar a escala da semana.")
+            st.stop()
+
+    schedule, summary = st.session_state.schedule_result
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -337,7 +354,14 @@ with tab4:
     excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
     st.download_button(
         "Baixar Excel visual (.xlsx)",
-        data=to_excel_bytes(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date),
+        data=to_excel_bytes(
+            schedule,
+            summary,
+            colaboradores=colaboradores,
+            eventos=eventos,
+            start=start_date,
+            domingo_especial=domingo_especial,
+        ),
         file_name=excel_filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
