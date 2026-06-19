@@ -6,8 +6,6 @@ import streamlit as st
 
 from escala_engine import (
     DATA_DIR,
-    build_weekly_visual_rows,
-    collaborator_kind_map,
     coverage_diagnostics,
     generate_schedule,
     load_csv,
@@ -156,6 +154,25 @@ def normalize_date_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame
             df[column] = df[column].map(br_date)
     return df
 
+
+def display_action(value: object) -> str:
+    text = str(value).strip()
+    return ACOES_LEGADAS.get(text.upper(), text)
+
+
+def prepare_ajustes_display(df: pd.DataFrame) -> pd.DataFrame:
+    df = normalize_date_columns(df, ["data"])
+    if "acao" in df.columns:
+        df["acao"] = df["acao"].map(display_action)
+    return df
+
+
+def ensure_colaborador_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "carga_horaria" not in df.columns:
+        df["carga_horaria"] = "7"
+    return df
+
 st.caption("Operação semanal por dia, período, setor, função, colaborador, horário de entrada, folgas, férias, afastamentos e extras.")
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -175,6 +192,7 @@ if "reload" not in st.session_state:
 # Força recarregar quando salvar dados.
 cache = read_all()
 colaboradores = cache["colaboradores"]
+colaboradores = ensure_colaborador_columns(colaboradores)
 quadro = cache["quadro"]
 eventos = cache["eventos"]
 ajustes = cache["ajustes"]
@@ -208,16 +226,26 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["1. Colaboradores", "2. Quadro ideal", "
 with tab1:
     st.subheader("Cadastro de colaboradores, estagiários e extras")
     st.info("Edite os dados e clique em salvar. Extras externos entram por sugestão automática; colaboradores fixos entram na base conforme folgas e ajustes.")
-    st.markdown('<div class="v4-card">Planilha editável: inclua, remova ou ajuste colaboradores diretamente na grade.</div>', unsafe_allow_html=True)
-    edited = st.data_editor(
-        colaboradores,
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        key="colab_editor",
-    )
-    if st.button("Salvar colaboradores", type="primary"):
-        save_and_rerun(edited, "colaboradores.csv")
+    with st.container(border=True):
+        st.markdown('<div class="v4-card">Planilha editável: inclua, remova ou ajuste colaboradores diretamente na grade. Use <strong>carga_horaria</strong> para indicar quantas horas a pessoa cobre a partir do horário de entrada.</div>', unsafe_allow_html=True)
+        edited = st.data_editor(
+            colaboradores,
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            key="colab_editor",
+            column_config={
+                "carga_horaria": st.column_config.NumberColumn(
+                    "Carga horária",
+                    help="Horas trabalhadas a partir do horário de entrada. Com 7h, Manhã cobre Tarde e Tarde cobre Noite.",
+                    min_value=1,
+                    max_value=12,
+                    step=0.5,
+                ),
+            },
+        )
+        if st.button("Salvar colaboradores", type="primary"):
+            save_and_rerun(edited, "colaboradores.csv")
 
 with tab2:
     st.subheader("Quadro ideal por dia, período e setor")
@@ -259,89 +287,119 @@ Use **Ajustes semanais** para decisões manuais da gestão. Exemplos de ação: 
             {"Ação": "Observação", "Quando usar": "Registra uma informação sem alterar automaticamente a escala."},
         ]))
 
-    edited_ajustes = st.data_editor(
-        ajustes_display,
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        key="ajustes_editor",
-    )
-    if st.button("Salvar ajustes semanais", type="primary"):
-        save_and_rerun(normalize_date_columns(edited_ajustes, ["data"]), "ajustes_semanais.csv")
+    with st.container(border=True):
+        edited_ajustes = st.data_editor(
+            ajustes_display,
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            key="ajustes_editor",
+            column_config={
+                "nome": st.column_config.SelectboxColumn(
+                    "Nome",
+                    help="Selecione exatamente o nome cadastrado na aba Colaboradores.",
+                    options=colaborador_nomes,
+                    required=False,
+                ),
+                "acao": st.column_config.SelectboxColumn(
+                    "Ação",
+                    help="Escolha a ação manual a aplicar na semana.",
+                    options=ACOES_AJUSTE,
+                    required=False,
+                ),
+                "periodo": st.column_config.SelectboxColumn("Período", options=PERIODOS_OFICIAIS, required=False),
+                "setor": st.column_config.SelectboxColumn("Setor", options=SETORES_OFICIAIS, required=False),
+                "horario": st.column_config.SelectboxColumn("Horário", options=HORARIOS_CONHECIDOS, required=False),
+            },
+        )
+        if st.button("Salvar ajustes semanais", type="primary"):
+            save_and_rerun(normalize_date_columns(edited_ajustes, ["data"]), "ajustes_semanais.csv")
 
 with tab4:
     st.subheader("Escala Semanal")
     st.caption("Selecione a semana na lateral e use os botões abaixo para gerar, imprimir ou baixar os relatórios.")
     action_cols = st.columns([1, 1, 4])
     with action_cols[0]:
-        st.button("Gerar Sugestão", type="primary")
+        gerar_sugestao = st.button("Gerar Sugestão", type="primary")
     with action_cols[1]:
         st.button("Imprimir", help="Use Ctrl+P / Cmd+P para imprimir os cards da escala.")
-    schedule, summary = generate_schedule(
-        colaboradores=colaboradores,
-        ideal=quadro,
-        eventos=eventos,
-        ajustes=ajustes,
-        start=start_date,
-        domingo_especial=domingo_especial,
-        sugerir_extras=sugerir_extras,
-    )
+    if gerar_sugestao:
+        st.session_state.schedule_result = generate_schedule(
+            colaboradores=colaboradores,
+            ideal=quadro,
+            eventos=eventos,
+            ajustes=ajustes,
+            start=start_date,
+            domingo_especial=domingo_especial,
+            sugerir_extras=sugerir_extras,
+        )
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Pessoas/linhas na escala", len(schedule))
-    with c2:
-        st.metric("Alertas de falta", int(summary["faltam"].sum()) if not summary.empty else 0)
-    with c3:
-        st.metric("Sugestões de extras", int((schedule["origem"] == "Sugestão extra").sum()) if not schedule.empty and "origem" in schedule else 0)
-
-    st.write("### Tabela da escala")
-    st.dataframe(schedule, width="stretch", hide_index=True)
-
-    st.write("### Conferência do quadro ideal")
-    if not summary.empty:
-        def highlight_gap(row):
-            if row["faltam"] > 0:
-                return ["background-color: #ffd6d6"] * len(row)
-            if row["sobra"] > 0:
-                return ["background-color: #fff4cc"] * len(row)
-            return [""] * len(row)
-        st.dataframe(summary.style.apply(highlight_gap, axis=1), width="stretch", hide_index=True)
-
-        st.dataframe(summary.style.apply(highlight_gap, axis=1), use_container_width=True, hide_index=True)
-        faltas = summary[summary["faltam"] > 0].copy()
-        if not faltas.empty:
-            st.error("Alertas finais após tentativa automática de preenchimento")
-            st.dataframe(
-                faltas[["dia", "periodo", "setor", "ideal", "escalado", "faltam", "motivo_falta"]],
-                use_container_width=True,
-                hide_index=True,
-            )
+    if "schedule_result" not in st.session_state:
+        st.info("Clique em **Gerar Sugestão** para montar a escala da semana.")
     else:
-        st.info("Nenhum quadro ideal encontrado.")
+        schedule, summary = st.session_state.schedule_result
 
-    st.write("### Diagnóstico de cobertura")
-    diagnostico = coverage_diagnostics(summary, colaboradores, schedule, eventos, start_date)
-    if not diagnostico.empty:
-        st.markdown('<div class="coverage-help">Use esta área para entender se a falta é de cadastro, disponibilidade, extra ou excesso no quadro ideal.</div>', unsafe_allow_html=True)
-        st.dataframe(diagnostico, width="stretch", hide_index=True)
-    else:
-        st.info("Não há dados suficientes para diagnóstico de cobertura.")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Pessoas/linhas na escala", len(schedule))
+        with c2:
+            st.metric("Alertas de falta", int(summary["faltam"].sum()) if not summary.empty else 0)
+        with c3:
+            st.metric("Sugestões de extras", int((schedule["origem"] == "Sugestão extra").sum()) if not schedule.empty and "origem" in schedule else 0)
 
-    st.write("### Texto pronto para WhatsApp")
-    text = whatsapp_text(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date)
-    st.text_area("Copie e cole no grupo", value=text, height=420)
+        st.write("### Tabela da escala")
+        st.dataframe(schedule, width="stretch", hide_index=True)
 
-    st.download_button("Baixar texto para WhatsApp (.txt)", data=text.encode("utf-8"), file_name="escala_whatsapp.txt", mime="text/plain")
-    st.download_button("Baixar escala em CSV", data=schedule.to_csv(index=False).encode("utf-8"), file_name="escala_semanal.csv", mime="text/csv")
-    excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
-    st.download_button(
-        "Baixar Excel visual (.xlsx)",
-        data=to_excel_bytes(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date),
-        file_name=excel_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+        st.write("### Conferência do quadro ideal")
+        if not summary.empty:
+            def highlight_gap(row):
+                if row["faltam"] > 0:
+                    return ["background-color: #ffd6d6"] * len(row)
+                if row["sobra"] > 0:
+                    return ["background-color: #fff4cc"] * len(row)
+                return [""] * len(row)
+            st.dataframe(summary.style.apply(highlight_gap, axis=1), width="stretch", hide_index=True)
 
+            st.dataframe(summary.style.apply(highlight_gap, axis=1), use_container_width=True, hide_index=True)
+            faltas = summary[summary["faltam"] > 0].copy()
+            if not faltas.empty:
+                st.error("Alertas finais após tentativa automática de preenchimento")
+                st.dataframe(
+                    faltas[["dia", "periodo", "setor", "ideal", "escalado", "faltam", "motivo_falta"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        else:
+            st.info("Nenhum quadro ideal encontrado.")
+
+        st.write("### Diagnóstico de cobertura")
+        diagnostico = coverage_diagnostics(summary, colaboradores, schedule, eventos, start_date)
+        if not diagnostico.empty:
+            st.markdown('<div class="coverage-help">Use esta área para entender se a falta é de cadastro, disponibilidade, extra ou excesso no quadro ideal.</div>', unsafe_allow_html=True)
+            st.dataframe(diagnostico, width="stretch", hide_index=True)
+        else:
+            st.info("Não há dados suficientes para diagnóstico de cobertura.")
+
+        st.write("### Texto pronto para WhatsApp")
+        text = whatsapp_text(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date)
+        st.text_area("Copie e cole no grupo", value=text, height=420)
+
+        st.download_button("Baixar texto para WhatsApp (.txt)", data=text.encode("utf-8"), file_name="escala_whatsapp.txt", mime="text/plain")
+        st.download_button("Baixar escala em CSV", data=schedule.to_csv(index=False).encode("utf-8"), file_name="escala_semanal.csv", mime="text/csv")
+        excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
+        st.download_button(
+            "Baixar Excel visual (.xlsx)",
+            data=to_excel_bytes(
+                schedule,
+                summary,
+                colaboradores=colaboradores,
+                eventos=eventos,
+                start=start_date,
+                domingo_especial=domingo_especial,
+            ),
+            file_name=excel_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 with tab5:
     st.subheader("Regras implementadas nesta versão")
     st.markdown("""
