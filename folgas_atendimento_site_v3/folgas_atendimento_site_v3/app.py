@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from html import escape
 import pandas as pd
 import streamlit as st
 
@@ -114,20 +113,6 @@ st.markdown(
         margin: 10px 0 16px;
         color: #26342b;
     }
-    .schedule-day-card { background: #ffffff; border: 1px solid #ded6c3; border-radius: 16px; margin: 18px 0; overflow: hidden; box-shadow: 0 8px 22px rgba(31, 63, 43, .08); }
-    .schedule-day-header { background: #d9b85f; color: #26342b; padding: 12px 18px; font-weight: 850; font-size: 1.08rem; letter-spacing: .03em; }
-    .schedule-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
-    .schedule-col { border-right: 1px solid #eee3c8; min-height: 120px; padding: 12px; }
-    .schedule-col:last-child { border-right: 0; }
-    .schedule-col h4 { margin: 0 0 10px; color: #1f4e3d; font-size: .95rem; text-transform: uppercase; }
-    .schedule-item { border: 1px solid #e6deca; border-radius: 10px; padding: 8px 9px; margin-bottom: 8px; background: #fbfaf6; }
-    .schedule-item strong { color: #1f4e3d; }
-    .schedule-time { font-weight: 850; color: #5f4d17; }
-    .schedule-meta { color: #59645d; font-size: .86rem; }
-    .schedule-tag { display: inline-block; border-radius: 999px; padding: 1px 7px; background: #d9ead3; color: #1f4e3d; font-size: .72rem; font-weight: 800; margin-left: 4px; }
-    .schedule-closed { color: #8a6d19; background: #fff4cc; border: 1px dashed #d9b85f; border-radius: 10px; padding: 10px; }
-    .coverage-help { background: #ffffff; border-left: 5px solid #d9b85f; padding: 12px 14px; border-radius: 12px; margin: 10px 0 16px; }
-    @media print { .stSidebar, header, .stTabs [role="tablist"], .stDownloadButton, .stButton { display: none !important; } .schedule-day-card { page-break-inside: avoid; } }
     .version-note { color: #6f6f6f; font-size: .86rem; margin-top: 18px; }
     </style>
     """,
@@ -171,18 +156,6 @@ def normalize_date_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame
             df[column] = df[column].map(br_date)
     return df
 
-
-def display_action(value: object) -> str:
-    text = str(value).strip()
-    return ACOES_LEGADAS.get(text.upper(), text)
-
-
-def prepare_ajustes_display(df: pd.DataFrame) -> pd.DataFrame:
-    df = normalize_date_columns(df, ["data"])
-    if "acao" in df.columns:
-        df["acao"] = df["acao"].map(display_action)
-    return df
-
 st.caption("Operação semanal por dia, período, setor, função, colaborador, horário de entrada, folgas, férias, afastamentos e extras.")
 
 DATA_DIR.mkdir(exist_ok=True)
@@ -222,43 +195,6 @@ with st.sidebar:
     sugerir_extras = st.checkbox("Sugerir extras automaticamente para fechar quadro", value=True)
     st.markdown('<div class="version-note">Versão: v4.1 correção de estabilidade</div>', unsafe_allow_html=True)
 
-
-
-def render_schedule_cards(schedule: pd.DataFrame, start: date, colaboradores: pd.DataFrame, eventos: pd.DataFrame, domingo_especial: bool) -> None:
-    visual_rows = build_weekly_visual_rows(schedule, start, colaboradores, eventos, domingo_especial=domingo_especial)
-    for _, day_row in visual_rows.iterrows():
-        day_title = escape(str(day_row["Dia"]))
-        columns_html = []
-        for col in ["Meio Dia / Manhã", "Tarde", "Noite", "Folgas"]:
-            raw = str(day_row.get(col, "") or "")
-            if raw == "FECHADO":
-                body = '<div class="schedule-closed">Fechado neste período</div>'
-            elif col == "Folgas":
-                names = [escape(item) for item in raw.split("\n") if item.strip()]
-                body = "".join(f'<div class="schedule-item"><strong>{name}</strong></div>' for name in names) or '<div class="schedule-meta">Sem folgas identificadas</div>'
-            else:
-                items = []
-                for line in [item for item in raw.split("\n") if item.strip()]:
-                    setor, horario, resto = (line.split(" | ", 2) + ["", ""])[:3]
-                    tags = []
-                    if "[EXTRA" in resto:
-                        tags.append("EXTRA")
-                    if "ESTAGIÁRIO" in resto:
-                        tags.append("ESTAGIÁRIO")
-                    nome_funcao = resto.split(" [", 1)[0]
-                    tag_html = "".join(f'<span class="schedule-tag">{escape(tag)}</span>' for tag in tags)
-                    items.append(
-                        '<div class="schedule-item">'
-                        f'<div><strong>{escape(nome_funcao)}</strong>{tag_html}</div>'
-                        f'<div><span class="schedule-time">{escape(horario)}</span> · {escape(setor)}</div>'
-                        '</div>'
-                    )
-                body = "".join(items) or '<div class="schedule-meta">Sem pessoas escaladas</div>'
-            columns_html.append(f'<div class="schedule-col"><h4>{escape(col)}</h4>{body}</div>')
-        st.markdown(
-            f'<div class="schedule-day-card"><div class="schedule-day-header">{day_title}</div><div class="schedule-grid">{"".join(columns_html)}</div></div>',
-            unsafe_allow_html=True,
-        )
 
 def save_and_rerun(df: pd.DataFrame, filename: str):
     save_csv(df, filename)
@@ -328,15 +264,6 @@ Use **Ajustes semanais** para decisões manuais da gestão. Exemplos de ação: 
         num_rows="dynamic",
         width="stretch",
         hide_index=True,
-        column_config={
-            "data": st.column_config.TextColumn("Data (dd/mm/aaaa)"),
-            "nome": st.column_config.SelectboxColumn("Nome", options=colaborador_nomes, required=False),
-            "acao": st.column_config.SelectboxColumn("Ação", options=ACOES_AJUSTE, required=False),
-            "setor": st.column_config.SelectboxColumn("Setor", options=["", *SETORES_OFICIAIS], required=False),
-            "periodo": st.column_config.SelectboxColumn("Período", options=["", *PERIODOS_OFICIAIS], required=False),
-            "horario": st.column_config.SelectboxColumn("Horário", options=["", *HORARIOS_CONHECIDOS], required=False),
-            "observacao": st.column_config.TextColumn("Observação"),
-        },
         key="ajustes_editor",
     )
     if st.button("Salvar ajustes semanais", type="primary"):
@@ -368,11 +295,8 @@ with tab4:
     with c3:
         st.metric("Sugestões de extras", int((schedule["origem"] == "Sugestão extra").sum()) if not schedule.empty and "origem" in schedule else 0)
 
-    st.write("### Relatório semanal visual")
-    render_schedule_cards(schedule, start_date, colaboradores, eventos, domingo_especial)
-
-    with st.expander("Tabela técnica da escala", expanded=False):
-        st.dataframe(schedule, width="stretch", hide_index=True)
+    st.write("### Tabela da escala")
+    st.dataframe(schedule, width="stretch", hide_index=True)
 
     st.write("### Conferência do quadro ideal")
     if not summary.empty:
@@ -383,6 +307,16 @@ with tab4:
                 return ["background-color: #fff4cc"] * len(row)
             return [""] * len(row)
         st.dataframe(summary.style.apply(highlight_gap, axis=1), width="stretch", hide_index=True)
+
+        st.dataframe(summary.style.apply(highlight_gap, axis=1), use_container_width=True, hide_index=True)
+        faltas = summary[summary["faltam"] > 0].copy()
+        if not faltas.empty:
+            st.error("Alertas finais após tentativa automática de preenchimento")
+            st.dataframe(
+                faltas[["dia", "periodo", "setor", "ideal", "escalado", "faltam", "motivo_falta"]],
+                use_container_width=True,
+                hide_index=True,
+            )
     else:
         st.info("Nenhum quadro ideal encontrado.")
 
@@ -403,7 +337,7 @@ with tab4:
     excel_filename = f"escala_atendimento_{start_date:%Y-%m-%d}.xlsx"
     st.download_button(
         "Baixar Excel visual (.xlsx)",
-        data=to_excel_bytes(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date, domingo_especial=domingo_especial),
+        data=to_excel_bytes(schedule, summary, colaboradores=colaboradores, eventos=eventos, start=start_date),
         file_name=excel_filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )

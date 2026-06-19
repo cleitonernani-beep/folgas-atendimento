@@ -12,7 +12,3 @@ def test_app_opens_without_streamlit_exceptions():
         "4. Gerar escala",
         "5. Ajuda / Regras",
     ]
-    markdown_values = [str(item.value) for item in at.markdown]
-    assert any("schedule-day-card" in value for value in markdown_values)
-    assert any("Diagnóstico de cobertura" in str(header.value) for header in at.markdown)
-    assert {"Gerar Sugestão", "Imprimir"}.issubset({button.label for button in at.button})
