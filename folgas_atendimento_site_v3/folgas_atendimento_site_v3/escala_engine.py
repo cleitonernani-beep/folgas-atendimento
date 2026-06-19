@@ -22,6 +22,7 @@ DIAS_PT = {
 }
 PERIODOS = ["Manhã", "Tarde", "Noite"]
 SETORES = ["Praça", "Copa", "Caixa", "Escritório", "Entrega"]
+SCHEDULE_COLUMNS = ["data", "dia", "periodo", "setor", "funcao", "nome", "horario", "carga_horaria", "origem", "observacao"]
 
 
 def load_csv(name: str) -> pd.DataFrame:
@@ -76,6 +77,16 @@ def parse_date(value: object) -> date | None:
         return pd.to_datetime(text, dayfirst=True).date()
     except Exception:
         return None
+
+
+def parse_workload_hours(value: object, default: float = 7.0) -> float:
+    text = str(value).strip().replace(",", ".")
+    if not text:
+        return default
+    try:
+        return float(text)
+    except Exception:
+        return default
 
 
 def date_range(start: date, days: int = 7) -> list[date]:
@@ -294,13 +305,14 @@ def generate_base_schedule(
                     "funcao": funcao,
                     "nome": nome,
                     "horario": horario,
+                    "carga_horaria": str(emp.get("carga_horaria", "7")).strip() or "7",
                     "origem": "Base",
                     "observacao": str(emp.get("obs", "")).strip(),
                 }
             )
     schedule = pd.DataFrame(rows)
     if schedule.empty:
-        return pd.DataFrame(columns=["data", "dia", "periodo", "setor", "funcao", "nome", "horario", "origem", "observacao"])
+        return pd.DataFrame(columns=SCHEDULE_COLUMNS)
     schedule = apply_manual_adjustments(schedule, colaboradores, ajustes)
     return schedule.sort_values(["data", "periodo", "setor", "horario", "nome"]).reset_index(drop=True)
 
@@ -345,6 +357,7 @@ def apply_manual_adjustments(schedule: pd.DataFrame, colaboradores: pd.DataFrame
                 "funcao": funcao,
                 "nome": nome,
                 "horario": str(act.get("horario", "")).strip() or (str(emp.iloc[0].get("horario_padrao", "")).strip() if not emp.empty else ""),
+                "carga_horaria": str(emp.iloc[0].get("carga_horaria", "7")).strip() if not emp.empty else "7",
                 "origem": "Manual",
                 "observacao": str(act.get("observacao", "")).strip(),
             }
@@ -370,12 +383,10 @@ def covered_periods(row: pd.Series) -> list[str]:
     - Extras sugeridos de Manhã contam só Manhã, pois normalmente são apoio pontual.
     """
     periodo = str(row.get("periodo", "")).strip()
-    origem = str(row.get("origem", "")).strip()
-    if origem == "Sugestão extra" and periodo == "Manhã":
-        return ["Manhã"]
-    if periodo == "Manhã":
+    carga_horaria = parse_workload_hours(row.get("carga_horaria", "7"))
+    if periodo == "Manhã" and carga_horaria >= 7:
         return ["Manhã", "Tarde"]
-    if periodo == "Tarde":
+    if periodo == "Tarde" and carga_horaria >= 7:
         return ["Tarde", "Noite"]
     if periodo == "Noite":
         return ["Noite"]
@@ -547,6 +558,7 @@ def add_schedule_row(schedule: pd.DataFrame, row: pd.Series, current: date, peri
         "funcao": str(row.get("funcao", "Extra")).strip(),
         "nome": str(row.get("nome", "")).strip(),
         "horario": horario,
+        "carga_horaria": str(row.get("carga_horaria", "7")).strip() or "7",
         "origem": origem,
         "observacao": f"Preenchido automaticamente para cobrir {setor} / {periodo}.",
     }

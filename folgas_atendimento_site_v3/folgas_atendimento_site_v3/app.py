@@ -185,6 +185,7 @@ if "reload" not in st.session_state:
 # Força recarregar quando salvar dados.
 cache = read_all()
 colaboradores = cache["colaboradores"]
+colaboradores = ensure_colaborador_columns(colaboradores)
 quadro = cache["quadro"]
 eventos = cache["eventos"]
 ajustes = cache["ajustes"]
@@ -218,16 +219,26 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["1. Colaboradores", "2. Quadro ideal", "
 with tab1:
     st.subheader("Cadastro de colaboradores, estagiários e extras")
     st.info("Edite os dados e clique em salvar. Extras externos entram por sugestão automática; colaboradores fixos entram na base conforme folgas e ajustes.")
-    st.markdown('<div class="v4-card">Planilha editável: inclua, remova ou ajuste colaboradores diretamente na grade.</div>', unsafe_allow_html=True)
-    edited = st.data_editor(
-        colaboradores,
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        key="colab_editor",
-    )
-    if st.button("Salvar colaboradores", type="primary"):
-        save_and_rerun(edited, "colaboradores.csv")
+    with st.container(border=True):
+        st.markdown('<div class="v4-card">Planilha editável: inclua, remova ou ajuste colaboradores diretamente na grade. Use <strong>carga_horaria</strong> para indicar quantas horas a pessoa cobre a partir do horário de entrada.</div>', unsafe_allow_html=True)
+        edited = st.data_editor(
+            colaboradores,
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            key="colab_editor",
+            column_config={
+                "carga_horaria": st.column_config.NumberColumn(
+                    "Carga horária",
+                    help="Horas trabalhadas a partir do horário de entrada. Com 7h, Manhã cobre Tarde e Tarde cobre Noite.",
+                    min_value=1,
+                    max_value=12,
+                    step=0.5,
+                ),
+            },
+        )
+        if st.button("Salvar colaboradores", type="primary"):
+            save_and_rerun(edited, "colaboradores.csv")
 
 with tab2:
     st.subheader("Quadro ideal por dia, período e setor")
@@ -269,15 +280,33 @@ Use **Ajustes semanais** para decisões manuais da gestão. Exemplos de ação: 
             {"Ação": "Observação", "Quando usar": "Registra uma informação sem alterar automaticamente a escala."},
         ]))
 
-    edited_ajustes = st.data_editor(
-        ajustes_display,
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        key="ajustes_editor",
-    )
-    if st.button("Salvar ajustes semanais", type="primary"):
-        save_and_rerun(normalize_date_columns(edited_ajustes, ["data"]), "ajustes_semanais.csv")
+    with st.container(border=True):
+        edited_ajustes = st.data_editor(
+            ajustes_display,
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            key="ajustes_editor",
+            column_config={
+                "nome": st.column_config.SelectboxColumn(
+                    "Nome",
+                    help="Selecione exatamente o nome cadastrado na aba Colaboradores.",
+                    options=colaborador_nomes,
+                    required=False,
+                ),
+                "acao": st.column_config.SelectboxColumn(
+                    "Ação",
+                    help="Escolha a ação manual a aplicar na semana.",
+                    options=ACOES_AJUSTE,
+                    required=False,
+                ),
+                "periodo": st.column_config.SelectboxColumn("Período", options=PERIODOS_OFICIAIS, required=False),
+                "setor": st.column_config.SelectboxColumn("Setor", options=SETORES_OFICIAIS, required=False),
+                "horario": st.column_config.SelectboxColumn("Horário", options=HORARIOS_CONHECIDOS, required=False),
+            },
+        )
+        if st.button("Salvar ajustes semanais", type="primary"):
+            save_and_rerun(normalize_date_columns(edited_ajustes, ["data"]), "ajustes_semanais.csv")
 
 with tab4:
     st.subheader("Escala Semanal")

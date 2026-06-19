@@ -1,5 +1,5 @@
 from datetime import date
-from escala_engine import load_csv, generate_schedule
+from escala_engine import load_csv, generate_schedule, covered_periods
 
 
 def test_generate_schedule_runs():
@@ -37,6 +37,14 @@ def test_visual_excel_export_has_required_sheets():
     assert workbook['Escala por Colaborador'].freeze_panes == 'A2'
     assert [cell.value for cell in workbook['Cobertura'][1]] == ['Dia', 'Período', 'Setor', 'Ideal', 'Escalado', 'Diferença', 'Status']
     assert workbook['Escala por Dia'].max_row > 1
+
+
+def test_workload_controls_covered_periods():
+    import pandas as pd
+
+    assert covered_periods(pd.Series({'periodo': 'Manhã', 'carga_horaria': '7'})) == ['Manhã', 'Tarde']
+    assert covered_periods(pd.Series({'periodo': 'Tarde', 'carga_horaria': '7'})) == ['Tarde', 'Noite']
+    assert covered_periods(pd.Series({'periodo': 'Tarde', 'carga_horaria': '4'})) == ['Tarde']
 def test_auto_fill_uses_secondary_sector_before_alerting():
     import pandas as pd
 
