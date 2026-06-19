@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 DATA_DIR = Path(__file__).parent / "data"
 DIAS_PT = {
@@ -110,6 +112,22 @@ def employee_active(row: pd.Series, current: date, eventos: pd.DataFrame) -> boo
                     return False
     return True
 
+
+def employee_event_status(nome: str, current: date, eventos: pd.DataFrame) -> tuple[str, str]:
+    """Retorna status visual de ausência do colaborador para o Excel."""
+    if eventos.empty:
+        return "", ""
+    evs = eventos[eventos["nome"].astype(str).str.strip().str.lower() == str(nome).strip().lower()]
+    for _, ev in evs.iterrows():
+        tipo = str(ev.get("tipo", "")).strip().upper()
+        if not is_between(current, parse_date(ev.get("data_inicio")), parse_date(ev.get("data_fim"))):
+            continue
+        observacao = str(ev.get("observacao", "")).strip()
+        if tipo in {"FÉRIAS", "FERIAS"}:
+            return "FÉRIAS", observacao
+        if tipo in {"AFASTAMENTO", "ATESTADO"}:
+            return "AFASTAMENTO", observacao
+    return "", ""
 
 def explicit_folga(nome: str, current: date, eventos: pd.DataFrame) -> bool:
     if eventos.empty:
@@ -684,73 +702,132 @@ def whatsapp_text(schedule: pd.DataFrame, summary: pd.DataFrame | None = None) -
     return "\n".join(lines).strip()
 
 
-def build_excel_sheets(schedule: pd.DataFrame, summary: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_excel_sheets(
+    schedule: pd.DataFrame,
+    summary: pd.DataFrame,
+    colaboradores: pd.DataFrame | None = None,
+    eventos: pd.DataFrame | None = None,
+    start: date | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     dias_semana = ["Sábado", "Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta"]
+    datas_por_dia = {DIAS_PT[d.weekday()]: d for d in date_range(start)} if start else {}
+
+    nomes = set(schedule["nome"].astype(str).str.strip()) if not schedule.empty and "nome" in schedule else set()
+    if colaboradores is not None and not colaboradores.empty and "nome" in colaboradores:
+        nomes.update(colaboradores["nome"].astype(str).str.strip().replace("", pd.NA).dropna().tolist())
+
+    rows_colaborador = []
+    for nome in sorted(n for n in nomes if n):
+        emp_df = schedule[schedule["nome"].astype(str).str.strip().str.lower() == nome.lower()] if not schedule.empty else pd.DataFrame()
+        row = {"Colaborador": nome}
+        for dia in dias_semana:
+            dia_df = emp_df[emp_df["dia"] == dia].sort_values(["horario", "setor", "funcao"]) if not emp_df.empty else pd.DataFrame()
+            status = ""
+            obs_status = ""
+            if eventos is not None and dia in datas_por_dia:
+                status, obs_status = employee_event_status(nome, datas_por_dia[dia], eventos)
+            if status:
+                row[dia] = "\n".join([part for part in [status, obs_status] if part])
+            elif dia_df.empty:
+                row[dia] = "FOLGA"
+            else:
+                partes = []
+                for _, item in dia_df.iterrows():
+                    setor_funcao = " / ".join(
+                        str(item.get(col, "")).strip()
+                        for col in ["setor", "funcao"]
+                        if str(item.get(col, "")).strip()
+                    )
+                    detalhe = [str(item.get("horario", "")).strip(), setor_funcao]
+                    if str(item.get("origem", "")).strip() == "Sugestão extra":
+                        detalhe.append("EXTRA")
+                    if str(item.get("observacao", "")).strip():
+                        detalhe.append(str(item.get("observacao", "")).strip())
+                    partes.append("\n".join([p for p in detalhe if p]))
+                row[dia] = "\n\n".join(partes)
+        rows_colaborador.append(row)
+    por_colaborador = pd.DataFrame(rows_colaborador, columns=["Colaborador", *dias_semana])
 
     if schedule.empty:
-        por_colaborador = pd.DataFrame(columns=["Colaborador", *dias_semana])
-        por_dia = pd.DataFrame(columns=["Dia", "Data", "Período", "Setor", "Horário", "Colaborador", "Função"])
+        por_dia = pd.DataFrame(columns=["Dia", "Data", "Período", "Setor", "Horário", "Colaborador", "Função", "Observação"])
     else:
-        rows_colaborador = []
-        for nome, emp_df in schedule.groupby("nome", sort=True):
-            row = {"Colaborador": nome}
-            for dia in dias_semana:
-                dia_df = emp_df[emp_df["dia"] == dia].sort_values(["horario", "setor", "funcao"])
-                if dia_df.empty:
-                    row[dia] = "FOLGA"
-                else:
-                    partes = []
-                    for _, item in dia_df.iterrows():
-                        partes.append(
-                            " | ".join(
-                                str(item.get(col, "")).strip()
-                                for col in ["horario", "setor", "funcao"]
-                                if str(item.get(col, "")).strip()
-                            )
-                        )
-                    row[dia] = "\n".join(partes)
-            rows_colaborador.append(row)
-        por_colaborador = pd.DataFrame(rows_colaborador, columns=["Colaborador", *dias_semana])
-
         por_dia = schedule.copy()
         por_dia["Data"] = por_dia["data"].map(lambda value: pd.to_datetime(value).strftime("%d/%m/%Y") if str(value).strip() else "")
-        por_dia = por_dia.rename(
-            columns={
-                "dia": "Dia",
-                "periodo": "Período",
-                "setor": "Setor",
-                "horario": "Horário",
-                "nome": "Colaborador",
-                "funcao": "Função",
-            }
-        )[["Dia", "Data", "Período", "Setor", "Horário", "Colaborador", "Função"]]
-        por_dia = por_dia.sort_values(["Data", "Período", "Setor", "Horário", "Colaborador"])
+        por_dia["Observação"] = por_dia.apply(
+            lambda row: " | ".join(
+                part for part in ["EXTRA" if str(row.get("origem", "")).strip() == "Sugestão extra" else "", str(row.get("observacao", "")).strip()] if part
+            ),
+            axis=1,
+        )
+        por_dia = por_dia.sort_values(["data", "periodo", "setor", "horario", "nome"])
+        por_dia = por_dia.rename(columns={"dia": "Dia", "periodo": "Período", "setor": "Setor", "horario": "Horário", "nome": "Colaborador", "funcao": "Função"})
+        por_dia = por_dia[["Dia", "Data", "Período", "Setor", "Horário", "Colaborador", "Função", "Observação"]]
 
     cobertura = summary.copy() if summary is not None else pd.DataFrame()
     if not cobertura.empty:
         cobertura["diferença"] = cobertura["escalado"].astype(int) - cobertura["ideal"].astype(int)
-        cobertura["status"] = cobertura["diferença"].map(lambda diff: "OK" if diff == 0 else ("FALTA" if diff < 0 else "SOBRA"))
+        cobertura["status"] = cobertura["diferença"].map(lambda diff: "OK" if diff == 0 else ("FALTA" if diff < 0 else "EXCEDENTE"))
         cobertura = cobertura.rename(columns={"dia": "Dia", "periodo": "Período", "setor": "Setor", "ideal": "Ideal", "escalado": "Escalado", "diferença": "Diferença", "status": "Status"})
         cobertura = cobertura[["Dia", "Período", "Setor", "Ideal", "Escalado", "Diferença", "Status"]]
     else:
         cobertura = pd.DataFrame(columns=["Dia", "Período", "Setor", "Ideal", "Escalado", "Diferença", "Status"])
-
     return por_colaborador, por_dia, cobertura
 
 
-def to_excel_bytes(schedule: pd.DataFrame, summary: pd.DataFrame) -> bytes:
+def _style_worksheet(sheet) -> None:
+    header_fill = PatternFill("solid", fgColor="1F4E3D")
+    header_font = Font(color="FFFFFF", bold=True)
+    day_fill = PatternFill("solid", fgColor="D9EAD3")
+    folga_fill = PatternFill("solid", fgColor="FFF2CC")
+    away_fill = PatternFill("solid", fgColor="DDEBF7")
+    extra_fill = PatternFill("solid", fgColor="93C47D")
+    alert_fill = PatternFill("solid", fgColor="F4CCCC")
+    ok_fill = PatternFill("solid", fgColor="D9EAD3")
+    thin = Side(style="thin", color="B7B7B7")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    sheet.freeze_panes = "A2"
+    for row in sheet.iter_rows():
+        for cell in row:
+            cell.border = border
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            text = str(cell.value or "").upper()
+            if cell.row == 1:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            elif "FOLGA" in text:
+                cell.fill = folga_fill
+            elif "FÉRIAS" in text or "FERIAS" in text or "AFASTAMENTO" in text:
+                cell.fill = away_fill
+            elif "EXTRA" in text:
+                cell.fill = extra_fill
+            elif "FALTA" in text:
+                cell.fill = alert_fill
+            elif text == "OK":
+                cell.fill = ok_fill
+            elif sheet.title == "Escala por Colaborador" and cell.column > 1:
+                cell.fill = day_fill
+    for column_cells in sheet.columns:
+        max_len = max(len(str(cell.value or "")) for cell in column_cells)
+        sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(max_len + 2, 14), 45)
+    for row in range(2, sheet.max_row + 1):
+        sheet.row_dimensions[row].height = 48
+
+
+def to_excel_bytes(
+    schedule: pd.DataFrame,
+    summary: pd.DataFrame,
+    colaboradores: pd.DataFrame | None = None,
+    eventos: pd.DataFrame | None = None,
+    start: date | None = None,
+) -> bytes:
     output = io.BytesIO()
-    por_colaborador, por_dia, cobertura = build_excel_sheets(schedule, summary)
+    por_colaborador, por_dia, cobertura = build_excel_sheets(schedule, summary, colaboradores, eventos, start)
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         por_colaborador.to_excel(writer, index=False, sheet_name="Escala por Colaborador")
         por_dia.to_excel(writer, index=False, sheet_name="Escala por Dia")
         cobertura.to_excel(writer, index=False, sheet_name="Cobertura")
-
         for sheet in writer.book.worksheets:
-            sheet.freeze_panes = "A2"
-            for column_cells in sheet.columns:
-                max_len = max(len(str(cell.value or "")) for cell in column_cells)
-                sheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_len + 2, 14), 42)
-                for cell in column_cells:
-                    cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
+            _style_worksheet(sheet)
     return output.getvalue()
